@@ -1,1 +1,40 @@
-/.idea
+# Binaries
+zbor
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Environment variables
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# templ generated files
+*_templ.go
+
+# Air
+tmp/
+build-errors.log
+
+# OS
+.DS_Store
+Thumbs.db

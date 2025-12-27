@@ -1,0 +1,102 @@
+package components
+
+import "zbor/web/layouts"
+
+templ About() {
+	@layouts.Base("About") {
+		<div class="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+			<div class="max-w-3xl mx-auto">
+				<h1 class="text-3xl font-extrabold text-gray-900 sm:text-4xl">
+					Zborについて
+				</h1>
+				<div class="mt-6 text-lg text-gray-500 space-y-6">
+					<p>
+						Zborは、Go言語とEchoフレームワーク、templテンプレートエンジンを使用したシンプルなWebアプリケーションです。
+					</p>
+					<p>
+						このプロジェクトは、最小限の依存関係で構成されており、Webアプリケーション開発の基礎を学ぶのに最適です。
+					</p>
+				</div>
+				<div class="mt-10">
+					<h2 class="text-2xl font-bold text-gray-900">使用技術</h2>
+					<div class="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+						<div class="bg-white overflow-hidden shadow rounded-lg">
+							<div class="px-4 py-5 sm:p-6">
+								<dt class="text-sm font-medium text-gray-500 truncate">
+									プログラミング言語
+								</dt>
+								<dd class="mt-1 text-3xl font-semibold text-gray-900">
+									Go 1.25
+								</dd>
+							</div>
+						</div>
+						<div class="bg-white overflow-hidden shadow rounded-lg">
+							<div class="px-4 py-5 sm:p-6">
+								<dt class="text-sm font-medium text-gray-500 truncate">
+									HTTPフレームワーク
+								</dt>
+								<dd class="mt-1 text-3xl font-semibold text-gray-900">
+									Echo v4
+								</dd>
+							</div>
+						</div>
+						<div class="bg-white overflow-hidden shadow rounded-lg">
+							<div class="px-4 py-5 sm:p-6">
+								<dt class="text-sm font-medium text-gray-500 truncate">
+									テンプレートエンジン
+								</dt>
+								<dd class="mt-1 text-3xl font-semibold text-gray-900">
+									templ
+								</dd>
+							</div>
+						</div>
+						<div class="bg-white overflow-hidden shadow rounded-lg">
+							<div class="px-4 py-5 sm:p-6">
+								<dt class="text-sm font-medium text-gray-500 truncate">
+									CSSフレームワーク
+								</dt>
+								<dd class="mt-1 text-3xl font-semibold text-gray-900">
+									Tailwind CSS
+								</dd>
+							</div>
+						</div>
+					</div>
+				</div>
+				<div class="mt-10">
+					<h2 class="text-2xl font-bold text-gray-900">特徴</h2>
+					<ul class="mt-6 space-y-4">
+						<li class="flex">
+							<svg class="flex-shrink-0 h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+							</svg>
+							<span class="ml-3 text-gray-700">シンプルで理解しやすいプロジェクト構成</span>
+						</li>
+						<li class="flex">
+							<svg class="flex-shrink-0 h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+							</svg>
+							<span class="ml-3 text-gray-700">型安全なテンプレートによる開発体験の向上</span>
+						</li>
+						<li class="flex">
+							<svg class="flex-shrink-0 h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+							</svg>
+							<span class="ml-3 text-gray-700">ホットリロードによる快適な開発環境</span>
+						</li>
+						<li class="flex">
+							<svg class="flex-shrink-0 h-6 w-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+							</svg>
+							<span class="ml-3 text-gray-700">拡張可能な設計（将来的にDB、認証などを追加可能）</span>
+						</li>
+					</ul>
+				</div>
+				<div class="mt-10">
+					<a href="/" class="inline-flex items-center px-4 py-2 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+						← ホームに戻る
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
