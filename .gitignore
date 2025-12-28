@@ -2,6 +2,7 @@
 zbor
 zbor-transcribe
 zbor-youtube
+zbor-webfetch
 *.exe
 *.exe~
 *.dll
