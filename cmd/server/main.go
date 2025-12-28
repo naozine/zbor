@@ -66,6 +66,17 @@ func main() {
 		modelDir = "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
 	}
 
+	// VADモデルパス（デフォルト: ./models/silero_vad.onnx）
+	vadModelPath := os.Getenv("ZBOR_VAD_MODEL")
+	if vadModelPath == "" {
+		vadModelPath = "models/silero_vad.onnx"
+	}
+	// VADモデルが存在しない場合は空にして無効化
+	if _, err := os.Stat(vadModelPath); os.IsNotExist(err) {
+		log.Printf("VAD model not found at %s, VAD disabled", vadModelPath)
+		vadModelPath = ""
+	}
+
 	// リポジトリ作成
 	articleRepo := storage.NewArticleRepository(db)
 	tagRepo := storage.NewTagRepository(db)
@@ -75,12 +86,13 @@ func main() {
 
 	// ASR設定
 	asrConfig := &asr.Config{
-		EncoderPath: filepath.Join(modelDir, "encoder-epoch-99-avg-1.onnx"),
-		DecoderPath: filepath.Join(modelDir, "decoder-epoch-99-avg-1.onnx"),
-		JoinerPath:  filepath.Join(modelDir, "joiner-epoch-99-avg-1.onnx"),
-		TokensPath:  filepath.Join(modelDir, "tokens.txt"),
-		SampleRate:  16000,
-		NumThreads:  4,
+		EncoderPath:  filepath.Join(modelDir, "encoder-epoch-99-avg-1.onnx"),
+		DecoderPath:  filepath.Join(modelDir, "decoder-epoch-99-avg-1.onnx"),
+		JoinerPath:   filepath.Join(modelDir, "joiner-epoch-99-avg-1.onnx"),
+		TokensPath:   filepath.Join(modelDir, "tokens.txt"),
+		VADModelPath: vadModelPath,
+		SampleRate:   16000,
+		NumThreads:   4,
 	}
 
 	// 音声取り込みモジュール

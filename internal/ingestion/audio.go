@@ -193,7 +193,7 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 		}
 	}
 
-	reportProgress(10, "converting")
+	reportProgress(10, "initializing")
 
 	// Create recognizer
 	recognizer, err := asr.NewRecognizer(i.asrConfig)
@@ -202,30 +202,49 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	}
 	defer recognizer.Close()
 
+	// Check if VAD is available
+	useVAD := i.asrConfig.VADModelPath != ""
+
 	// Process each file
 	var allResults []*asr.Result
 	fileCount := len(metadata.Files)
 	for idx, filePath := range metadata.Files {
-		// Convert to WAV if needed
-		needsConvert, _ := asr.NeedsConversion(filePath)
-		wavPath := filePath
-		if needsConvert {
-			wavPath, err = asr.ConvertToWavTemp(filePath)
-			if err != nil {
-				return fmt.Errorf("failed to convert audio: %w", err)
-			}
-			defer os.Remove(wavPath)
-		}
-
 		// Calculate progress: transcribing takes 30-90%
 		// Each file gets an equal share of that range
-		baseProgress := 30 + (60 * idx / fileCount)
-		reportProgress(baseProgress, "transcribing")
+		fileProgressStart := 30 + (60 * idx / fileCount)
+		fileProgressEnd := 30 + (60 * (idx + 1) / fileCount)
 
-		// Transcribe
-		result, err := recognizer.TranscribeFile(wavPath)
-		if err != nil {
-			return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+		var result *asr.Result
+
+		if useVAD {
+			// Use VAD-based transcription (handles ffmpeg conversion internally)
+			vadConfig := asr.DefaultVADConfig(i.asrConfig.VADModelPath)
+			result, err = recognizer.TranscribeWithVAD(filePath, vadConfig, func(progress int, step string) {
+				// Map internal progress (30-90) to this file's range
+				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
+				reportProgress(fileProgress, step)
+			})
+			if err != nil {
+				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+			}
+		} else {
+			// Fallback: Convert to WAV and use standard transcription
+			reportProgress(fileProgressStart, "converting")
+			needsConvert, _ := asr.NeedsConversion(filePath)
+			wavPath := filePath
+			if needsConvert {
+				wavPath, err = asr.ConvertToWavTemp(filePath)
+				if err != nil {
+					return fmt.Errorf("failed to convert audio: %w", err)
+				}
+				defer os.Remove(wavPath)
+			}
+
+			reportProgress(fileProgressStart+10, "transcribing")
+			result, err = recognizer.TranscribeFile(wavPath)
+			if err != nil {
+				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+			}
 		}
 
 		// Add speaker label
