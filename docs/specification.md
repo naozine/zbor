@@ -1112,4 +1112,177 @@ related:
 
 ---
 
+## 付録C. トランスクリプト同期再生機能
+
+### 概要
+
+文字起こし結果と音声を同期して確認するためのメンテナンス用機能。
+テキストをクリックすると、該当箇所から音声がストリーミング再生される。
+
+### ユースケース
+
+- 文字起こし結果の精度確認
+- 誤認識箇所の特定・修正
+- タイムスタンプのずれ確認
+
+### データ保持形式
+
+#### ProcessingArtifact の保存形式
+
+文字起こし結果は `Format: "json"` で以下の構造を保持：
+
+```json
+{
+  "text": "全体のテキスト",
+  "tokens": [
+    {
+      "text": "こんにちは",
+      "start_time": 0.0,
+      "duration": 0.8
+    },
+    {
+      "text": "今日",
+      "start_time": 1.2,
+      "duration": 0.3
+    },
+    {
+      "text": "は",
+      "start_time": 1.5,
+      "duration": 0.1
+    }
+  ],
+  "total_duration": 120.5,
+  "speaker": "田中"  // 複数ファイルの場合
+}
+```
+
+**トークン粒度:**
+- Sherpa-ONNXの `Tokens`/`Timestamps`/`Durations` をそのまま保持
+- 単語・サブワード単位でクリック可能
+- タイムスタンプは秒単位（float32）
+
+### 音声ストリーミング
+
+#### 方式: HTTP Range Request
+
+ブラウザの `<audio>` 要素ではなく、Web Audio API + fetch でストリーミング再生。
+
+**メリット:**
+- 軽量な再生制御
+- 任意の位置からの即時再生
+- カスタムUIが作りやすい
+
+#### API
+
+```
+GET /api/audio/:source_id/stream
+  Headers:
+    Range: bytes=0-1048575
+
+  Response:
+    206 Partial Content
+    Content-Range: bytes 0-1048575/5242880
+    Content-Type: audio/wav
+```
+
+**ポイント:**
+- WAV形式で配信（変換済みファイルを使用）
+- Range Requestで部分取得
+- 秒→バイト位置の変換はクライアント側で計算
+  - `byteOffset = seconds * sampleRate * channels * bytesPerSample + headerSize`
+
+### UI設計
+
+#### トランスクリプト同期ページ
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 会議録 2025-01-15                           [戻る] │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  ▶ 再生 / ⏸ 停止    ━━━━━━●━━━━━━━  02:15 / 10:30  │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  [00:00] [こんにちは] [今日] [は] [天気] [が] [いい] │
+│           ↑ 単語単位でクリック可能                   │
+│  [00:05] [今日] [の] [議題] [は] ...    ← 再生中ハイライト│
+│  [00:12] [まず] [最初] [に] ...                     │
+│  ...                                                │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 機能
+
+1. **単語クリック → 再生開始**
+   - クリックした単語の `start_time` から再生
+   - 自動スクロールで再生位置を追従
+
+2. **再生中トークンのハイライト**
+   - 現在再生中の単語を視覚的に強調（背景色変更）
+   - 複数話者の場合は話者ごとに色分け
+
+3. **シンプルな再生コントロール**
+   - 再生/停止
+   - シークバー（ドラッグで位置移動）
+   - 再生速度変更（0.5x, 1x, 1.5x, 2x）
+
+4. **キーボードショートカット**
+   - Space: 再生/停止
+   - ←/→: 5秒戻る/進む
+   - ↑/↓: 前/次のセグメント
+
+### 実装方針
+
+#### フロントエンド
+
+```javascript
+// Web Audio API でストリーミング再生
+class AudioStreamer {
+  async playFrom(seconds) {
+    const byteOffset = this.secondsToBytes(seconds);
+    const response = await fetch(`/api/audio/${sourceId}/stream`, {
+      headers: { 'Range': `bytes=${byteOffset}-` }
+    });
+    // AudioContext で再生
+  }
+}
+
+// セグメントクリックハンドラ
+function onSegmentClick(segment) {
+  audioStreamer.playFrom(segment.start_time);
+  highlightSegment(segment);
+}
+```
+
+#### バックエンド
+
+```go
+// internal/handlers/audio.go
+func (h *AudioHandler) Stream(c echo.Context) error {
+    sourceID := c.Param("source_id")
+
+    // 音声ファイルパスを取得
+    source, _ := h.sourceRepo.GetByID(ctx, sourceID)
+    filePath := source.FilePath // WAV形式
+
+    // Range Requestを処理
+    return c.File(filePath) // Echoが自動でRange対応
+}
+```
+
+### 制限事項
+
+- WAV形式のみ対応（圧縮形式はバイト位置計算が複雑）
+- ブラウザのWeb Audio API対応が必要
+- 大きなファイルはメモリ使用量に注意
+
+### 優先度
+
+この機能はPhase 2（音声処理統合）の後、メンテナンス機能として実装。
+コア機能（文字起こし→記事生成）が動いてから着手。
+
+---
+
 **仕様書 終わり**
