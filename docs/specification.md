@@ -309,12 +309,14 @@ CREATE TABLE articles (
     FOREIGN KEY (parent_id) REFERENCES articles(id)
 );
 
--- 全文検索用仮想テーブル（SQLite FTS5）
+-- 全文検索用仮想テーブル（SQLite FTS5 + trigram）
+-- trigramトークナイザーで日本語の部分一致検索に対応
 CREATE VIRTUAL TABLE articles_fts USING fts5(
     article_id UNINDEXED,
     title,
     content,
-    summary
+    summary,
+    tokenize = 'trigram'
 );
 
 -- タグテーブル
@@ -390,6 +392,53 @@ CREATE INDEX idx_articles_source_type ON articles(source_type);
 CREATE INDEX idx_articles_status ON articles(status);
 CREATE INDEX idx_sources_status ON sources(status);
 CREATE INDEX idx_jobs_status ON processing_jobs(status);
+```
+
+### 5.2 全文検索戦略
+
+#### trigramトークナイザー
+
+日本語は空白で区切られないため、FTS5のデフォルトトークナイザーでは検索できない。
+trigramトークナイザーを使用し、テキストを3文字ずつに分割してインデックスを作成する。
+
+```
+入力: "今日は天気がいい"
+トークン: ["今日は", "日は天", "は天気", "天気が", "気がい", "がいい"]
+```
+
+**メリット:**
+- 日本語の部分一致検索が可能
+- 外部依存なし（MeCab不要）
+- SQLite 3.34.0+ で標準サポート
+
+**制限:**
+- 2文字以下のクエリは検索不可（trigramが生成できない）
+- インデックスサイズがやや大きくなる
+
+#### 検索クエリの処理
+
+```go
+// 検索クエリの長さに応じて戦略を切り替え
+func Search(query string) ([]Article, error) {
+    runeCount := len([]rune(query))
+
+    if runeCount < 3 {
+        // 2文字以下: LIKEにフォールバック（低頻度なので許容）
+        return db.Query(`
+            SELECT * FROM articles
+            WHERE content LIKE ? OR title LIKE ?
+            ORDER BY created_at DESC`,
+            "%"+query+"%", "%"+query+"%")
+    }
+
+    // 3文字以上: FTS5で高速検索
+    return db.Query(`
+        SELECT a.* FROM articles a
+        JOIN articles_fts f ON a.id = f.article_id
+        WHERE articles_fts MATCH ?
+        ORDER BY rank`,
+        query)
+}
 ```
 
 ---
