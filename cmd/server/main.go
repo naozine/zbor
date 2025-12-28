@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"zbor/internal/handlers"
 	"zbor/internal/storage"
 	"zbor/internal/version"
+	"zbor/internal/worker"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -46,10 +50,22 @@ func main() {
 	// リポジトリ作成
 	articleRepo := storage.NewArticleRepository(db)
 	tagRepo := storage.NewTagRepository(db)
+	jobRepo := storage.NewJobRepository(db)
+
+	// ワーカー作成・起動
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := worker.NewWorker(jobRepo)
+	// TODO: Register job handlers here
+	// w.RegisterHandler(storage.JobTypeTranscribe, transcribeHandler)
+	w.Start(ctx)
+	defer w.Stop()
 
 	// ハンドラー作成
 	articleHandler := handlers.NewArticleHandler(articleRepo)
 	tagHandler := handlers.NewTagHandler(tagRepo)
+	jobHandler := handlers.NewJobHandler(jobRepo)
 
 	// Echoインスタンスの作成
 	e := echo.New()
@@ -61,6 +77,8 @@ func main() {
 	// ルートの登録（Web UI）
 	e.GET("/", handlers.Home)
 	e.GET("/about", handlers.About)
+	e.GET("/articles", articleHandler.ListPage)
+	e.GET("/articles/:id", articleHandler.DetailPage)
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
 			"status":  "ok",
@@ -88,9 +106,25 @@ func main() {
 	api.PUT("/tags/:id", tagHandler.Update)
 	api.DELETE("/tags/:id", tagHandler.Delete)
 
+	// Jobs API
+	api.GET("/jobs", jobHandler.List)
+	api.GET("/jobs/stats", jobHandler.Stats)
+	api.GET("/jobs/:id", jobHandler.Get)
+	api.DELETE("/jobs/:id", jobHandler.Delete)
+
+	// グレースフルシャットダウン
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
+		cancel()
+		e.Close()
+	}()
+
 	// サーバー起動
 	log.Printf("Starting Zbor v%s on port %s", version.Version, port)
 	if err := e.Start(fmt.Sprintf(":%s", port)); err != nil {
-		log.Fatal(err)
+		log.Println("Server stopped")
 	}
 }

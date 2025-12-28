@@ -6,6 +6,7 @@ import (
 
 	"zbor/internal/storage"
 	"zbor/internal/storage/sqlc"
+	"zbor/web/components"
 
 	"github.com/labstack/echo/v4"
 )
@@ -270,4 +271,35 @@ func (h *ArticleHandler) RemoveTag(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// ListPage は記事一覧ページを表示
+func (h *ArticleHandler) ListPage(c echo.Context) error {
+	ctx := c.Request().Context()
+	articles, err := h.repo.List(ctx, storage.ListOptions{Limit: 100})
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return render(c, components.ArticleList(articles))
+}
+
+// DetailPage は記事詳細ページを表示
+func (h *ArticleHandler) DetailPage(c echo.Context) error {
+	ctx := c.Request().Context()
+	id := c.Param("id")
+
+	article, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if article == nil {
+		return c.String(http.StatusNotFound, "Article not found")
+	}
+
+	tags, err := h.repo.GetArticleTags(ctx, id)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return render(c, components.ArticleDetail(article, tags))
 }
