@@ -14,6 +14,10 @@ require (
 	github.com/dop251/goja v0.0.0-20250125213203-5ef83b82af17 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20250208200701-d0013a598941 // indirect
+	github.com/k2-fsa/sherpa-onnx-go v1.12.20 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-linux v1.12.20 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-macos v1.12.20 // indirect
+	github.com/k2-fsa/sherpa-onnx-go-windows v1.12.20 // indirect
 	github.com/kkdai/youtube/v2 v2.10.5 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect

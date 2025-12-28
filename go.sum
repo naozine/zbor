@@ -17,6 +17,14 @@ github.com/google/pprof v0.0.0-20250208200701-d0013a598941 h1:43XjGa6toxLpeksjcx
 github.com/google/pprof v0.0.0-20250208200701-d0013a598941/go.mod h1:vavhavw2zAxS5dIdcRluK6cSGGPlZynqzFM8NdvU144=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/k2-fsa/sherpa-onnx-go v1.12.20 h1:tQYCk7U2VrL6dO6LRPSJiDZgtXOzISoHaAgMhSa1tkw=
+github.com/k2-fsa/sherpa-onnx-go v1.12.20/go.mod h1:B/ynRbVa5gpYoZYeYgY3zPi4MTfKk95UZueZDSIhbjk=
+github.com/k2-fsa/sherpa-onnx-go-linux v1.12.20 h1:0NY5XVRX/unNDLDAkR3q8jXTUZ1WNTLiPP8MUSELWnQ=
+github.com/k2-fsa/sherpa-onnx-go-linux v1.12.20/go.mod h1:NXEH2rsBgTdqY59YpPq6CtSBlBAXy/8a9FmpLERU97I=
+github.com/k2-fsa/sherpa-onnx-go-macos v1.12.20 h1:9CrKABoDHx/BsFOv3uZcaG1bDjR+5TSK975gS3bNNjI=
+github.com/k2-fsa/sherpa-onnx-go-macos v1.12.20/go.mod h1:ZOhUAXC62Unj0ZNfu6zxSFKcW96aXf7P3BsqiUyOBbE=
+github.com/k2-fsa/sherpa-onnx-go-windows v1.12.20 h1:1Qsp4vkngTkEDxlc+GfA+/1B8ypbxIE0p8fsnfaSlkg=
+github.com/k2-fsa/sherpa-onnx-go-windows v1.12.20/go.mod h1:5AX7TU8+P/gInjglY1ijtWUM2b8iyR0QX4yEngzMe64=
 github.com/kkdai/youtube/v2 v2.10.5 h1:22v6qas+/gEhZVmkqAa8fBsLhUsJA5HPDA+mSFkUBwo=
 github.com/kkdai/youtube/v2 v2.10.5/go.mod h1:pm4RuJ2tRIIaOvz4YMIpCY8Ls4Fm7IVtnZQyule61MU=
 github.com/labstack/echo/v4 v4.13.4 h1:oTZZW+T3s9gAu5L8vmzihV7/lkXGZuITzTQkTEhcXEA=

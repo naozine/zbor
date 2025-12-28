@@ -1,5 +1,6 @@
 # Binaries
 zbor
+zbor-transcribe
 *.exe
 *.exe~
 *.dll
@@ -38,3 +39,7 @@ build-errors.log
 # OS
 .DS_Store
 Thumbs.db
+
+#
+output/
+models/
