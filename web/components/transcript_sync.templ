@@ -1,0 +1,225 @@
+package components
+
+import (
+	"fmt"
+	"zbor/internal/asr"
+	"zbor/web/layouts"
+)
+
+templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
+	@layouts.Base(title + " - Transcript Sync") {
+		<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+			<div class="mb-6">
+				<a href="/articles" class="text-blue-600 hover:text-blue-800 flex items-center">
+					<svg class="w-5 h-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+					</svg>
+					Back
+				</a>
+			</div>
+
+			<div class="bg-white shadow rounded-lg overflow-hidden">
+				<div class="px-6 py-4 border-b border-gray-200">
+					<h1 class="text-xl font-bold text-gray-900">{ title }</h1>
+				</div>
+
+				<!-- Audio Player Controls -->
+				<div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
+					<div class="flex items-center space-x-4">
+						<button
+							id="play-btn"
+							class="flex items-center justify-center w-12 h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+						>
+							<svg id="play-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+							</svg>
+							<svg id="pause-icon" class="w-6 h-6 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+							</svg>
+						</button>
+
+						<div class="flex-1">
+							<div class="relative">
+								<input
+									type="range"
+									id="seek-bar"
+									min="0"
+									max="100"
+									value="0"
+									class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+								/>
+							</div>
+							<div class="flex justify-between text-xs text-gray-500 mt-1">
+								<span id="current-time">0:00</span>
+								<span id="total-time">0:00</span>
+							</div>
+						</div>
+
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Speed:</label>
+							<select id="speed-select" class="text-sm border-gray-300 rounded-md">
+								<option value="0.5">0.5x</option>
+								<option value="0.75">0.75x</option>
+								<option value="1" selected>1x</option>
+								<option value="1.25">1.25x</option>
+								<option value="1.5">1.5x</option>
+								<option value="2">2x</option>
+							</select>
+						</div>
+					</div>
+				</div>
+
+				<!-- Transcript -->
+				<div class="px-6 py-6">
+					<div id="transcript" class="text-lg leading-relaxed">
+						for i, token := range transcript.Tokens {
+							<span
+								class="token cursor-pointer hover:bg-blue-100 rounded px-0.5 transition-colors"
+								data-index={ fmt.Sprintf("%d", i) }
+								data-start={ fmt.Sprintf("%.3f", token.StartTime) }
+							>{ token.Text }</span>
+						}
+					</div>
+				</div>
+			</div>
+
+			<!-- Keyboard shortcuts help -->
+			<div class="mt-4 text-sm text-gray-500">
+				<p>Keyboard shortcuts: <kbd class="px-1 bg-gray-100 rounded">Space</kbd> Play/Pause,
+				<kbd class="px-1 bg-gray-100 rounded">←</kbd>/<kbd class="px-1 bg-gray-100 rounded">→</kbd> Seek 5s</p>
+			</div>
+		</div>
+
+		<audio id="audio" preload="auto">
+			<source src={ "/api/audio/" + sourceID + "/stream" } type="audio/wav"/>
+		</audio>
+
+		<script>
+			const audio = document.getElementById('audio');
+			const playBtn = document.getElementById('play-btn');
+			const playIcon = document.getElementById('play-icon');
+			const pauseIcon = document.getElementById('pause-icon');
+			const seekBar = document.getElementById('seek-bar');
+			const currentTimeEl = document.getElementById('current-time');
+			const totalTimeEl = document.getElementById('total-time');
+			const speedSelect = document.getElementById('speed-select');
+			const tokens = document.querySelectorAll('.token');
+
+			let currentTokenIndex = -1;
+
+			// Format time as M:SS
+			function formatTime(seconds) {
+				const mins = Math.floor(seconds / 60);
+				const secs = Math.floor(seconds % 60);
+				return `${mins}:${secs.toString().padStart(2, '0')}`;
+			}
+
+			// Update play/pause button
+			function updatePlayButton() {
+				if (audio.paused) {
+					playIcon.classList.remove('hidden');
+					pauseIcon.classList.add('hidden');
+				} else {
+					playIcon.classList.add('hidden');
+					pauseIcon.classList.remove('hidden');
+				}
+			}
+
+			// Highlight current token based on audio time
+			function updateHighlight() {
+				const currentTime = audio.currentTime;
+				let newIndex = -1;
+
+				for (let i = tokens.length - 1; i >= 0; i--) {
+					const startTime = parseFloat(tokens[i].dataset.start);
+					if (currentTime >= startTime) {
+						newIndex = i;
+						break;
+					}
+				}
+
+				if (newIndex !== currentTokenIndex) {
+					// Remove old highlight
+					if (currentTokenIndex >= 0 && currentTokenIndex < tokens.length) {
+						tokens[currentTokenIndex].classList.remove('bg-yellow-200');
+					}
+					// Add new highlight
+					if (newIndex >= 0) {
+						tokens[newIndex].classList.add('bg-yellow-200');
+						// Scroll into view if needed
+						tokens[newIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+					}
+					currentTokenIndex = newIndex;
+				}
+			}
+
+			// Play/Pause
+			playBtn.addEventListener('click', () => {
+				if (audio.paused) {
+					audio.play();
+				} else {
+					audio.pause();
+				}
+			});
+
+			audio.addEventListener('play', updatePlayButton);
+			audio.addEventListener('pause', updatePlayButton);
+
+			// Time update
+			audio.addEventListener('timeupdate', () => {
+				currentTimeEl.textContent = formatTime(audio.currentTime);
+				seekBar.value = (audio.currentTime / audio.duration) * 100 || 0;
+				updateHighlight();
+			});
+
+			audio.addEventListener('loadedmetadata', () => {
+				totalTimeEl.textContent = formatTime(audio.duration);
+			});
+
+			// Seek bar
+			seekBar.addEventListener('input', () => {
+				const time = (seekBar.value / 100) * audio.duration;
+				audio.currentTime = time;
+			});
+
+			// Speed control
+			speedSelect.addEventListener('change', () => {
+				audio.playbackRate = parseFloat(speedSelect.value);
+			});
+
+			// Click on token to seek
+			tokens.forEach(token => {
+				token.addEventListener('click', () => {
+					const startTime = parseFloat(token.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Keyboard shortcuts
+			document.addEventListener('keydown', (e) => {
+				if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+				switch (e.code) {
+					case 'Space':
+						e.preventDefault();
+						if (audio.paused) {
+							audio.play();
+						} else {
+							audio.pause();
+						}
+						break;
+					case 'ArrowLeft':
+						e.preventDefault();
+						audio.currentTime = Math.max(0, audio.currentTime - 5);
+						break;
+					case 'ArrowRight':
+						e.preventDefault();
+						audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+						break;
+				}
+			});
+		</script>
+	}
+}

@@ -133,6 +133,17 @@ templ ArticleDetail(article *sqlc.Article, tags []sqlc.Tag) {
 						</div>
 					}
 
+					if article.SourceID != nil && article.SourceType != nil && *article.SourceType == "audio" {
+						<div class="mb-6 p-4 bg-blue-50 rounded-lg">
+							<a href={ templ.SafeURL("/audio/" + *article.SourceID + "/sync") } class="text-blue-600 hover:underline flex items-center">
+								<svg class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m2.828-9.9a9 9 0 0112.728 0"></path>
+								</svg>
+								Transcript Sync (audio playback)
+							</a>
+						</div>
+					}
+
 					<div class="prose max-w-none">
 						<pre class="whitespace-pre-wrap text-gray-800 font-sans">{ article.Content }</pre>
 					</div>

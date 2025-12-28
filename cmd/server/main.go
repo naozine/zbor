@@ -93,6 +93,9 @@ func main() {
 		dataDir,
 	)
 
+	// AudioHandler（ストリーミング・同期ページ用にリポジトリも渡す）
+	audioHandler := handlers.NewAudioHandler(audioIngester, sourceRepo, artifactRepo)
+
 	// ワーカー作成・起動
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -109,7 +112,6 @@ func main() {
 	articleHandler := handlers.NewArticleHandler(articleRepo)
 	tagHandler := handlers.NewTagHandler(tagRepo)
 	jobHandler := handlers.NewJobHandler(jobRepo)
-	audioHandler := handlers.NewAudioHandler(audioIngester)
 
 	// Echoインスタンスの作成
 	e := echo.New()
@@ -124,6 +126,7 @@ func main() {
 	e.GET("/articles", articleHandler.ListPage)
 	e.GET("/articles/:id", articleHandler.DetailPage)
 	e.GET("/audio/upload", audioHandler.UploadPage)
+	e.GET("/audio/:source_id/sync", audioHandler.TranscriptSyncPage)
 	e.GET("/jobs", jobHandler.ListPage)
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
@@ -160,6 +163,10 @@ func main() {
 
 	// Ingest API
 	api.POST("/ingest/audio", audioHandler.Upload)
+
+	// Audio API
+	api.GET("/audio/:source_id/stream", audioHandler.Stream)
+	api.GET("/audio/:source_id/transcript", audioHandler.Transcript)
 
 	// グレースフルシャットダウン
 	go func() {
