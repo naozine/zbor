@@ -603,11 +603,11 @@ zbor/
 │   │   └── jobs.go          # ジョブ管理（将来）
 │   ├── version/             # バージョン情報
 │   │   └── version.go
-│   ├── models/              # データモデル定義（将来）
-│   │   ├── article.go
-│   │   ├── source.go
+│   ├── models/              # 定数・ヘルパー（モデル型はsqlc生成）
+│   │   ├── article.go       # ソースタイプ定数など
+│   │   ├── source.go        # ステータス定数
 │   │   ├── tag.go
-│   │   └── job.go
+│   │   └── job.go           # ジョブタイプ・ステータス定数
 │   ├── ingestion/           # データ取り込みオーケストレーション（将来）
 │   │   ├── youtube.go       # internal/youtubeを使用
 │   │   ├── audio.go         # internal/asrを使用
@@ -618,10 +618,22 @@ zbor/
 │   │   ├── summarizer.go
 │   │   ├── converter.go
 │   │   └── pipeline.go
-│   ├── storage/             # ストレージ層（将来）
-│   │   ├── db.go
-│   │   ├── files.go
-│   │   └── repository.go
+│   ├── storage/             # ストレージ層
+│   │   ├── db.go            # DB接続・スキーマ初期化
+│   │   ├── schema.sql       # DDL定義（embed）
+│   │   ├── queries/         # sqlcクエリ定義
+│   │   │   ├── articles.sql
+│   │   │   ├── sources.sql
+│   │   │   ├── tags.sql
+│   │   │   └── jobs.sql
+│   │   ├── sqlc/            # sqlc生成コード
+│   │   │   ├── db.go
+│   │   │   ├── models.go
+│   │   │   └── *.sql.go
+│   │   ├── article_repository.go
+│   │   ├── source_repository.go
+│   │   ├── tag_repository.go
+│   │   └── job_repository.go
 │   └── worker/              # ジョブ処理（将来）
 │       ├── queue.go
 │       └── executor.go
@@ -832,6 +844,7 @@ GET    /api/articles/:id/related       関連記事取得
 **データベース：**
 - SQLite3（データベース）
 - modernc.org/sqlite（Pure Go SQLiteドライバー）
+- sqlc（SQLからGo型安全コード生成）
 
 **HTML/Web処理：**
 - goquery（HTML解析）
@@ -956,6 +969,39 @@ GET    /api/articles/:id/related       関連記事取得
 ---
 
 ## 付録
+
+### sqlc設定
+
+プロジェクトルートの`sqlc.yaml`:
+
+```yaml
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "internal/storage/queries"
+    schema: "internal/storage/schema.sql"
+    gen:
+      go:
+        package: "sqlc"
+        out: "internal/storage/sqlc"
+        emit_json_tags: true
+        emit_empty_slices: true
+        emit_pointers_for_null_types: true
+```
+
+**コード生成:**
+```bash
+sqlc generate
+```
+
+**注意事項:**
+- SQLファイルには日本語コメントを書かない（エンコーディング問題を回避）
+- FTS5のMATCH構文はsqlcで扱えないため、FTS検索は手動SQLで実装
+- `sqlc.narg()`はSQLiteで問題があるため、条件別に複数クエリを定義
+
+---
+
+## 付録（続き）
 
 ### A. API レスポンス例
 
