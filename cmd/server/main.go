@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"zbor/internal/asr"
 	"zbor/internal/handlers"
+	"zbor/internal/ingestion"
 	"zbor/internal/storage"
+	"zbor/internal/storage/sqlc"
 	"zbor/internal/version"
 	"zbor/internal/worker"
 
@@ -47,18 +50,58 @@ func main() {
 	defer db.Close()
 	log.Printf("Database initialized at %s", dbPath)
 
+	// データディレクトリ（デフォルト: ~/.zbor/data）
+	dataDir := os.Getenv("ZBOR_DATA_DIR")
+	if dataDir == "" {
+		home, _ := os.UserHomeDir()
+		dataDir = filepath.Join(home, ".zbor", "data")
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	// ASRモデルパス（デフォルト: ./models/sherpa-onnx-...）
+	modelDir := os.Getenv("ZBOR_MODEL_DIR")
+	if modelDir == "" {
+		modelDir = "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
+	}
+
 	// リポジトリ作成
 	articleRepo := storage.NewArticleRepository(db)
 	tagRepo := storage.NewTagRepository(db)
 	jobRepo := storage.NewJobRepository(db)
+	sourceRepo := storage.NewSourceRepository(db)
+	artifactRepo := storage.NewArtifactRepository(db)
+
+	// ASR設定
+	asrConfig := &asr.Config{
+		EncoderPath: filepath.Join(modelDir, "encoder-epoch-99-avg-1.onnx"),
+		DecoderPath: filepath.Join(modelDir, "decoder-epoch-99-avg-1.onnx"),
+		JoinerPath:  filepath.Join(modelDir, "joiner-epoch-99-avg-1.onnx"),
+		TokensPath:  filepath.Join(modelDir, "tokens.txt"),
+		SampleRate:  16000,
+		NumThreads:  4,
+	}
+
+	// 音声取り込みモジュール
+	audioIngester := ingestion.NewAudioIngester(
+		sourceRepo,
+		artifactRepo,
+		articleRepo,
+		jobRepo,
+		asrConfig,
+		dataDir,
+	)
 
 	// ワーカー作成・起動
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	w := worker.NewWorker(jobRepo)
-	// TODO: Register job handlers here
-	// w.RegisterHandler(storage.JobTypeTranscribe, transcribeHandler)
+	// 音声文字起こしハンドラーを登録
+	w.RegisterHandler(storage.JobTypeTranscribe, func(ctx context.Context, job *sqlc.ProcessingJob) error {
+		return audioIngester.ProcessTranscription(ctx, job)
+	})
 	w.Start(ctx)
 	defer w.Stop()
 
@@ -66,6 +109,7 @@ func main() {
 	articleHandler := handlers.NewArticleHandler(articleRepo)
 	tagHandler := handlers.NewTagHandler(tagRepo)
 	jobHandler := handlers.NewJobHandler(jobRepo)
+	audioHandler := handlers.NewAudioHandler(audioIngester)
 
 	// Echoインスタンスの作成
 	e := echo.New()
@@ -79,6 +123,8 @@ func main() {
 	e.GET("/about", handlers.About)
 	e.GET("/articles", articleHandler.ListPage)
 	e.GET("/articles/:id", articleHandler.DetailPage)
+	e.GET("/audio/upload", audioHandler.UploadPage)
+	e.GET("/jobs", jobHandler.ListPage)
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
 			"status":  "ok",
@@ -111,6 +157,9 @@ func main() {
 	api.GET("/jobs/stats", jobHandler.Stats)
 	api.GET("/jobs/:id", jobHandler.Get)
 	api.DELETE("/jobs/:id", jobHandler.Delete)
+
+	// Ingest API
+	api.POST("/ingest/audio", audioHandler.Upload)
 
 	// グレースフルシャットダウン
 	go func() {

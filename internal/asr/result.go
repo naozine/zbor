@@ -6,7 +6,14 @@ import (
 	"time"
 )
 
-// Segment represents a timestamped text segment in the transcription
+// Token represents a single word/subword with timestamp
+type Token struct {
+	Text      string  `json:"text"`
+	StartTime float32 `json:"start_time"` // in seconds
+	Duration  float32 `json:"duration"`   // in seconds
+}
+
+// Segment represents a timestamped text segment in the transcription (legacy, for SRT)
 type Segment struct {
 	Text      string  `json:"text"`
 	StartTime float64 `json:"start_time"` // in seconds
@@ -15,9 +22,12 @@ type Segment struct {
 
 // Result represents the complete transcription result
 type Result struct {
-	Text     string    `json:"text"`               // full transcription text
-	Segments []Segment `json:"segments,omitempty"` // timestamped segments (if available)
-	Duration float64   `json:"duration"`           // processing time in seconds
+	Text          string    `json:"text"`                     // full transcription text
+	Tokens        []Token   `json:"tokens,omitempty"`         // word-level timestamps
+	Segments      []Segment `json:"segments,omitempty"`       // grouped segments (for SRT)
+	TotalDuration float32   `json:"total_duration,omitempty"` // audio duration in seconds
+	Duration      float64   `json:"duration"`                 // processing time in seconds
+	Speaker       string    `json:"speaker,omitempty"`        // speaker label (for multi-file)
 }
 
 // FormatAsText returns the transcription as plain text

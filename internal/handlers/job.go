@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"zbor/internal/storage"
+	"zbor/web/components"
 
 	"github.com/labstack/echo/v4"
 )
@@ -100,4 +101,15 @@ func (h *JobHandler) Delete(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+// ListPage はジョブ一覧ページを表示
+func (h *JobHandler) ListPage(c echo.Context) error {
+	ctx := c.Request().Context()
+	jobs, err := h.repo.ListRecent(ctx, 50)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return render(c, components.JobList(jobs))
 }

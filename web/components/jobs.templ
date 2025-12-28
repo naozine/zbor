@@ -1,0 +1,128 @@
+package components
+
+import (
+	"zbor/internal/storage/sqlc"
+	"zbor/web/layouts"
+)
+
+templ JobList(jobs []sqlc.ProcessingJob) {
+	@layouts.Base("Jobs") {
+		<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+			<h1 class="text-2xl font-bold text-gray-900 mb-6">Processing Jobs</h1>
+
+			if len(jobs) == 0 {
+				<div class="text-center py-12 bg-white rounded-lg shadow">
+					<svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+					</svg>
+					<h3 class="mt-2 text-sm font-medium text-gray-900">No jobs</h3>
+					<p class="mt-1 text-sm text-gray-500">No processing jobs found.</p>
+				</div>
+			} else {
+				<div class="bg-white shadow overflow-hidden sm:rounded-md">
+					<ul class="divide-y divide-gray-200">
+						for _, job := range jobs {
+							<li class="px-4 py-4 sm:px-6">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center">
+										@jobStatusIcon(job.Status)
+										<div class="ml-3">
+											<p class="text-sm font-medium text-gray-900">
+												{ job.Type }
+											</p>
+											<p class="text-xs text-gray-500 font-mono">
+												{ job.ID }
+											</p>
+										</div>
+									</div>
+									<div class="flex items-center space-x-4">
+										if job.Status != nil {
+											<span class={ "px-2 py-1 text-xs font-semibold rounded-full", jobStatusClass(*job.Status) }>
+												{ *job.Status }
+											</span>
+										}
+										<span class="text-sm text-gray-500">
+											{ job.CreatedAt.Format("15:04:05") }
+										</span>
+									</div>
+								</div>
+								if job.Error != nil && *job.Error != "" {
+									<div class="mt-2 text-sm text-red-600">
+										{ *job.Error }
+									</div>
+								}
+							</li>
+						}
+					</ul>
+				</div>
+			}
+
+			<div class="mt-4">
+				<a href="/audio/upload" class="text-blue-600 hover:text-blue-800">
+					← Back to Audio Upload
+				</a>
+			</div>
+		</div>
+
+		<script>
+			// Auto-refresh every 3 seconds if there are running jobs
+			const hasRunningJobs = document.querySelector('[data-status="running"]') !== null;
+			if (hasRunningJobs) {
+				setTimeout(() => location.reload(), 3000);
+			}
+		</script>
+	}
+}
+
+templ jobStatusIcon(status *string) {
+	if status != nil {
+		switch *status {
+			case "queued":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+					</svg>
+				</div>
+			case "running":
+				<div class="flex-shrink-0" data-status="running">
+					<svg class="h-5 w-5 text-blue-500 animate-spin" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+				</div>
+			case "completed":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+					</svg>
+				</div>
+			case "failed":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+					</svg>
+				</div>
+			default:
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+					</svg>
+				</div>
+		}
+	}
+}
+
+func jobStatusClass(status string) string {
+	switch status {
+	case "queued":
+		return "bg-gray-100 text-gray-800"
+	case "running":
+		return "bg-blue-100 text-blue-800"
+	case "completed":
+		return "bg-green-100 text-green-800"
+	case "failed":
+		return "bg-red-100 text-red-800"
+	default:
+		return "bg-gray-100 text-gray-800"
+	}
+}

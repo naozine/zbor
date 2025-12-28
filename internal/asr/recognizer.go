@@ -73,14 +73,25 @@ func (r *Recognizer) TranscribeFile(audioPath string) (*Result, error) {
 
 	// Get result
 	result := stream.GetResult()
-	text := result.Text
 
-	duration := time.Since(startTime).Seconds()
+	// Extract tokens with timestamps
+	tokens := extractTokens(result)
+
+	// Calculate total audio duration from last token
+	var totalDuration float32
+	if len(tokens) > 0 {
+		lastToken := tokens[len(tokens)-1]
+		totalDuration = lastToken.StartTime + lastToken.Duration
+	}
+
+	processingTime := time.Since(startTime).Seconds()
 
 	return &Result{
-		Text:     text,
-		Segments: []Segment{}, // TODO: Extract segments if available
-		Duration: duration,
+		Text:          result.Text,
+		Tokens:        tokens,
+		Segments:      tokensToSegments(tokens),
+		TotalDuration: totalDuration,
+		Duration:      processingTime,
 	}, nil
 }
 
@@ -100,15 +111,113 @@ func (r *Recognizer) TranscribeBytes(samples []float32, sampleRate int) (*Result
 
 	// Get result
 	result := stream.GetResult()
-	text := result.Text
 
-	duration := time.Since(startTime).Seconds()
+	// Extract tokens with timestamps
+	tokens := extractTokens(result)
+
+	// Calculate total audio duration from last token
+	var totalDuration float32
+	if len(tokens) > 0 {
+		lastToken := tokens[len(tokens)-1]
+		totalDuration = lastToken.StartTime + lastToken.Duration
+	}
+
+	processingTime := time.Since(startTime).Seconds()
 
 	return &Result{
-		Text:     text,
-		Segments: []Segment{}, // TODO: Extract segments if available
-		Duration: duration,
+		Text:          result.Text,
+		Tokens:        tokens,
+		Segments:      tokensToSegments(tokens),
+		TotalDuration: totalDuration,
+		Duration:      processingTime,
 	}, nil
+}
+
+// extractTokens extracts Token slice from Sherpa-ONNX result
+func extractTokens(result *sherpa.OfflineRecognizerResult) []Token {
+	if result == nil || len(result.Tokens) == 0 {
+		return nil
+	}
+
+	tokens := make([]Token, 0, len(result.Tokens))
+	for i, text := range result.Tokens {
+		// Skip empty tokens
+		if text == "" {
+			continue
+		}
+
+		var startTime float32
+		var duration float32
+
+		if i < len(result.Timestamps) {
+			startTime = result.Timestamps[i]
+		}
+		if i < len(result.Durations) {
+			duration = result.Durations[i]
+		}
+
+		tokens = append(tokens, Token{
+			Text:      text,
+			StartTime: startTime,
+			Duration:  duration,
+		})
+	}
+
+	return tokens
+}
+
+// tokensToSegments groups tokens into segments for SRT output
+// Groups tokens with gaps > 0.5s into separate segments
+func tokensToSegments(tokens []Token) []Segment {
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	const gapThreshold = 0.5 // seconds
+
+	var segments []Segment
+	var currentText string
+	var segmentStart float64
+	var lastEnd float32
+
+	for i, token := range tokens {
+		tokenEnd := token.StartTime + token.Duration
+
+		if i == 0 {
+			segmentStart = float64(token.StartTime)
+			currentText = token.Text
+			lastEnd = tokenEnd
+			continue
+		}
+
+		// Check if there's a significant gap
+		gap := token.StartTime - lastEnd
+		if gap > gapThreshold {
+			// Save current segment
+			segments = append(segments, Segment{
+				Text:      currentText,
+				StartTime: segmentStart,
+				EndTime:   float64(lastEnd),
+			})
+			// Start new segment
+			segmentStart = float64(token.StartTime)
+			currentText = token.Text
+		} else {
+			currentText += token.Text
+		}
+		lastEnd = tokenEnd
+	}
+
+	// Add final segment
+	if currentText != "" {
+		segments = append(segments, Segment{
+			Text:      currentText,
+			StartTime: segmentStart,
+			EndTime:   float64(lastEnd),
+		})
+	}
+
+	return segments
 }
 
 // Close releases resources used by the recognizer
