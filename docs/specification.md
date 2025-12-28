@@ -220,13 +220,38 @@ type ProcessingJob struct {
     SourceID    string     `json:"source_id"`
     Type        string     `json:"type"`     // transcribe, fetch, summarize
     Status      string     `json:"status"`   // queued, running, completed, failed
+    Priority    int        `json:"priority"` // 0-9 (0が最高優先度)
     Progress    int        `json:"progress"` // 0-100
+    RetryCount  int        `json:"retry_count"`
     Error       string     `json:"error,omitempty"`
     CreatedAt   time.Time  `json:"created_at"`
     StartedAt   *time.Time `json:"started_at,omitempty"`
     CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 ```
+
+#### ジョブキュー設計
+
+**ワーカー設定：**
+- デフォルトワーカー数: 1（環境変数 `ZBOR_WORKERS` で変更可能）
+- 音声文字起こしはCPU負荷が高いため、同時実行数を制限
+
+**リトライ戦略：**
+- 最大リトライ回数: 3回
+- リトライ間隔: 指数バックオフ（1分, 5分, 15分）
+- リトライ対象: ネットワークエラー、一時的な障害
+- リトライ対象外: バリデーションエラー、認証エラー
+
+**タイムアウト：**
+- YouTube字幕取得: 60秒
+- YouTube音声ダウンロード: 10分
+- 音声文字起こし: 音声長 × 2（最大60分）
+- Webページ取得: 60秒
+
+**優先度：**
+- 0: 即時処理（ユーザー待機中）
+- 5: 通常処理（デフォルト）
+- 9: バッチ処理（夜間など）
 
 ### 4.7 ProcessingArtifact（処理成果物）
 
@@ -421,6 +446,42 @@ CREATE INDEX idx_jobs_status ON processing_jobs(status);
 8. 元音声ファイルを関連付けて保持
 ```
 
+#### 音声変換パイプライン
+
+Sherpa-ONNX + ReazonSpeechは **WAV 16kHz モノラル** 形式を要求する。
+様々な入力形式に対応するため、ffmpegによる前処理を行う。
+
+**依存関係：**
+- ffmpeg（システムにインストール済みであること）
+
+**変換コマンド：**
+```bash
+ffmpeg -i input.mp3 -ar 16000 -ac 1 -f wav output.wav
+```
+
+**対応入力形式：**
+- MP3, M4A, AAC, OGG, FLAC, WAV, WebM
+
+**変換処理の実装（将来）：**
+```go
+// internal/asr/converter.go
+func ConvertToWav(inputPath, outputPath string) error {
+    cmd := exec.Command("ffmpeg",
+        "-i", inputPath,
+        "-ar", "16000",  // サンプルレート
+        "-ac", "1",      // モノラル
+        "-f", "wav",
+        "-y",            // 上書き
+        outputPath,
+    )
+    return cmd.Run()
+}
+```
+
+**エラーハンドリング：**
+- ffmpegが見つからない → エラーメッセージで依存関係を案内
+- 変換失敗 → ジョブをfailed状態に、エラー詳細を記録
+
 ### 6.3 Web記事の処理フロー
 
 ```
@@ -465,17 +526,26 @@ zbor/
 │   ├── server/              # Webサーバー
 │   │   └── main.go
 │   ├── transcribe/          # 音声文字起こしCLI
-│   │   ├── main.go
-│   │   └── README.md
-│   ├── youtube-test/        # YouTube実験コード
+│   │   └── main.go
+│   ├── youtube-caption/     # YouTube字幕・音声取得CLI
+│   │   └── main.go
+│   ├── webfetch/            # Webページ取得CLI
 │   │   └── main.go
 │   └── worker/              # バックグラウンド処理ワーカー（将来）
 │       └── main.go
 ├── internal/
 │   ├── asr/                 # 音声認識コアモジュール
-│   │   ├── config.go
-│   │   ├── recognizer.go
-│   │   └── result.go
+│   │   ├── config.go        # モデル設定管理
+│   │   ├── recognizer.go    # Sherpa-ONNXラッパー
+│   │   └── result.go        # 結果型・フォーマット変換
+│   ├── youtube/             # YouTube操作ライブラリ
+│   │   ├── client.go        # YouTubeクライアント
+│   │   ├── caption.go       # 字幕取得・パース
+│   │   ├── audio.go         # 音声ダウンロード（多言語対応）
+│   │   └── result.go        # 結果型・フォーマット変換
+│   ├── webfetch/            # Webページ取得ライブラリ
+│   │   ├── client.go        # nz-html-fetchラッパー
+│   │   └── result.go        # 結果型・フォーマット変換
 │   ├── handlers/            # HTTPハンドラー
 │   │   ├── home.go
 │   │   ├── about.go
@@ -489,10 +559,10 @@ zbor/
 │   │   ├── source.go
 │   │   ├── tag.go
 │   │   └── job.go
-│   ├── ingestion/           # データ取り込みパイプライン（将来）
-│   │   ├── youtube.go
-│   │   ├── audio.go
-│   │   ├── url.go
+│   ├── ingestion/           # データ取り込みオーケストレーション（将来）
+│   │   ├── youtube.go       # internal/youtubeを使用
+│   │   ├── audio.go         # internal/asrを使用
+│   │   ├── url.go           # internal/webfetchを使用
 │   │   └── text.go
 │   ├── processing/          # 処理パイプライン（将来）
 │   │   ├── transcriber.go
@@ -787,17 +857,52 @@ GET    /api/articles/:id/related       関連記事取得
 **成果物：**
 - 完全な記事管理機能
 
-### Phase 6: 拡張機能（将来）
+### Phase 6a: LLM基本統合（将来）
 
-- [ ] LLM統合（要約生成）
-- [ ] LLMによる記事再構成
-- [ ] RAG（Retrieval-Augmented Generation）
-- [ ] セマンティック検索（ベクトル埋め込み）
-- [ ] 翻訳機能
-- [ ] グラフビュー（記事間リンク可視化）
+難易度: 低〜中
+
+- [ ] LLM API連携基盤（OpenAI / Anthropic）
+- [ ] 記事要約生成
 - [ ] タグ自動付与
-- [ ] 話者分離（音声）
 - [ ] Markdownエクスポート機能
+
+**成果物：**
+- 記事作成時に自動要約・タグ付け
+
+### Phase 6b: 高度な検索機能（将来）
+
+難易度: 中
+
+- [ ] セマンティック検索（ベクトル埋め込み）
+- [ ] ベクトルDB統合（SQLite-vec or 外部DB）
+- [ ] 類似記事推薦
+- [ ] グラフビュー（記事間リンク可視化）
+
+**成果物：**
+- 意味ベースの記事検索
+
+### Phase 6c: RAG・高度なLLM機能（将来）
+
+難易度: 高
+
+- [ ] RAG（Retrieval-Augmented Generation）
+- [ ] LLMによる記事再構成
+- [ ] ナレッジベース全体を使った質問応答
+- [ ] 翻訳機能
+
+**成果物：**
+- ナレッジベースを活用したAIアシスタント
+
+### Phase 6d: 音声処理の高度化（将来）
+
+難易度: 高（別モデル必要）
+
+- [ ] 話者分離（Speaker Diarization）
+- [ ] 話者識別・ラベリング
+- [ ] 感情分析
+
+**成果物：**
+- 会議録の話者別整理
 
 ---
 
