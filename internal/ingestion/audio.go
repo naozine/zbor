@@ -66,6 +66,9 @@ type IngestResult struct {
 	JobID    string
 }
 
+// ProgressCallback is called to report progress during processing
+type ProgressCallback func(progress int, step string)
+
 // Ingest starts the audio ingestion process
 // It saves the files, creates a source record, and queues a job for processing
 func (i *AudioIngester) Ingest(ctx context.Context, opts IngestOptions) (*IngestResult, error) {
@@ -150,10 +153,19 @@ func (i *AudioIngester) Ingest(ctx context.Context, opts IngestOptions) (*Ingest
 
 // ProcessTranscription processes a transcription job
 // This is called by the worker when processing the job
-func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.ProcessingJob) error {
+func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.ProcessingJob, onProgress ProgressCallback) error {
 	if job.SourceID == nil {
 		return fmt.Errorf("job has no source ID")
 	}
+
+	// Helper to report progress (nil-safe)
+	reportProgress := func(progress int, step string) {
+		if onProgress != nil {
+			onProgress(progress, step)
+		}
+	}
+
+	reportProgress(5, "preparing")
 
 	// Get source
 	source, err := i.sourceRepo.GetByID(ctx, *job.SourceID)
@@ -181,6 +193,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 		}
 	}
 
+	reportProgress(10, "converting")
+
 	// Create recognizer
 	recognizer, err := asr.NewRecognizer(i.asrConfig)
 	if err != nil {
@@ -190,6 +204,7 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 	// Process each file
 	var allResults []*asr.Result
+	fileCount := len(metadata.Files)
 	for idx, filePath := range metadata.Files {
 		// Convert to WAV if needed
 		needsConvert, _ := asr.NeedsConversion(filePath)
@@ -201,6 +216,11 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 			}
 			defer os.Remove(wavPath)
 		}
+
+		// Calculate progress: transcribing takes 30-90%
+		// Each file gets an equal share of that range
+		baseProgress := 30 + (60 * idx / fileCount)
+		reportProgress(baseProgress, "transcribing")
 
 		// Transcribe
 		result, err := recognizer.TranscribeFile(wavPath)
@@ -215,6 +235,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 		allResults = append(allResults, result)
 	}
+
+	reportProgress(90, "saving")
 
 	// Merge results if multiple files
 	var finalResult *asr.Result
@@ -257,6 +279,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	if err := i.sourceRepo.UpdateStatus(ctx, source.ID, storage.SourceStatusCompleted); err != nil {
 		return fmt.Errorf("failed to update source status: %w", err)
 	}
+
+	reportProgress(100, "")
 
 	return nil
 }

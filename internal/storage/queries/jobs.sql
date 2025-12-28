@@ -1,16 +1,16 @@
 -- name: CreateJob :exec
 INSERT INTO processing_jobs (
-    id, source_id, type, status, priority, progress,
+    id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetJobByID :one
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs WHERE id = ?;
 
 -- name: GetNextQueuedJob :one
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE status = 'queued'
@@ -25,9 +25,12 @@ WHERE id = ?;
 -- name: UpdateJobProgress :exec
 UPDATE processing_jobs SET progress = ? WHERE id = ?;
 
+-- name: UpdateJobProgressWithStep :exec
+UPDATE processing_jobs SET progress = ?, current_step = ? WHERE id = ?;
+
 -- name: CompleteJob :exec
 UPDATE processing_jobs
-SET status = 'completed', progress = 100, completed_at = ?
+SET status = 'completed', progress = 100, current_step = NULL, completed_at = ?
 WHERE id = ?;
 
 -- name: FailJob :exec
@@ -37,18 +40,18 @@ WHERE id = ?;
 
 -- name: RetryJob :exec
 UPDATE processing_jobs
-SET status = 'queued', retry_count = retry_count + 1, error = NULL
+SET status = 'queued', retry_count = retry_count + 1, error = NULL, current_step = NULL
 WHERE id = ?;
 
 -- name: GetJobsBySourceID :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE source_id = ?
 ORDER BY created_at DESC;
 
 -- name: ListJobsByStatus :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE status = ?
@@ -56,7 +59,7 @@ ORDER BY priority ASC, created_at ASC
 LIMIT ?;
 
 -- name: ListRecentJobs :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 ORDER BY created_at DESC

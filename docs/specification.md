@@ -1285,4 +1285,359 @@ func (h *AudioHandler) Stream(c echo.Context) error {
 
 ---
 
+## 付録D. ジョブ進捗表示・管理機能
+
+### 概要
+
+音声変換・文字起こしジョブの進捗状況をリアルタイムで表示し、ジョブの管理（削除など）を可能にする。
+
+### 要件
+
+1. **進捗表示**
+   - 処理中ジョブの進捗率（0-100%）をプログレスバーで表示
+   - 現在のステップを表示（例：「音声変換中」「文字起こし中」）
+   - リアルタイム更新（ポーリング）
+
+2. **ジョブ削除**
+   - ジョブ一覧から個別に削除可能
+   - 削除確認ダイアログ
+   - 実行中ジョブの削除は警告を表示
+
+### データモデル
+
+既存の `processing_jobs` テーブルを活用：
+
+```sql
+-- 既存フィールド
+progress INTEGER DEFAULT 0,    -- 進捗率 (0-100)
+error TEXT,                    -- エラーメッセージ
+
+-- 追加フィールド
+current_step TEXT,             -- 現在のステップ名
+```
+
+### 進捗ステップ定義
+
+音声文字起こしジョブの場合：
+
+| step | 進捗範囲 | 説明 |
+|------|---------|------|
+| `uploading` | 0-10% | ファイルアップロード・保存 |
+| `converting` | 10-30% | 音声フォーマット変換（WAV化） |
+| `transcribing` | 30-90% | 文字起こし処理 |
+| `saving` | 90-100% | 結果保存・記事生成 |
+
+### UI設計
+
+#### ジョブ一覧ページ (`/jobs`)
+
+```
+┌─────────────────────────────────────────────────────┐
+│ Processing Jobs                                     │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  🔄 transcribe          [running] 15:32:10   [🗑]  │
+│     abc123-...                                      │
+│     文字起こし中 (45%)                               │
+│     ████████░░░░░░░░░░░░                            │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│  ✓ transcribe          [completed] 15:30:22  [🗑]  │
+│     def456-...                                      │
+│                                                     │
+├─────────────────────────────────────────────────────┤
+│  ✗ transcribe            [failed] 15:28:05   [🗑]  │
+│     ghi789-...                                      │
+│     Error: failed to convert audio                  │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 削除確認モーダル
+
+```
+┌─────────────────────────────────────────┐
+│ ジョブを削除しますか？                   │
+├─────────────────────────────────────────┤
+│                                         │
+│  このジョブを削除しますか？              │
+│  この操作は取り消せません。              │
+│                                         │
+│  ⚠ このジョブは現在実行中です。         │ ← 実行中の場合のみ
+│    削除すると処理が中断されます。        │
+│                                         │
+│         [キャンセル]  [削除する]        │
+└─────────────────────────────────────────┘
+```
+
+### API設計
+
+#### 進捗更新（内部用）
+
+```go
+// internal/storage/job_repository.go
+func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress int64) error
+
+// 追加
+func (r *JobRepository) UpdateProgressWithStep(ctx context.Context, id string, progress int64, step string) error
+```
+
+#### ジョブ削除（既存）
+
+```
+DELETE /api/jobs/:id
+```
+
+### 実装方針
+
+#### 1. スキーマ変更
+
+```sql
+ALTER TABLE processing_jobs ADD COLUMN current_step TEXT;
+```
+
+#### 2. 進捗コールバック
+
+```go
+// internal/ingestion/audio.go
+type ProgressCallback func(progress int, step string)
+
+func (i *AudioIngester) ProcessTranscription(
+    ctx context.Context,
+    job *sqlc.ProcessingJob,
+    onProgress ProgressCallback,  // 追加
+) error {
+    onProgress(10, "converting")
+    // 音声変換...
+
+    onProgress(30, "transcribing")
+    // 文字起こし...
+
+    onProgress(90, "saving")
+    // 保存...
+}
+```
+
+#### 3. ワーカー統合
+
+```go
+// internal/worker/worker.go
+w.RegisterHandler(storage.JobTypeTranscribe, func(ctx context.Context, job *sqlc.ProcessingJob) error {
+    return audioIngester.ProcessTranscription(ctx, job, func(progress int, step string) {
+        jobRepo.UpdateProgressWithStep(ctx, job.ID, int64(progress), step)
+    })
+})
+```
+
+#### 4. UI更新
+
+```javascript
+// ポーリングで進捗更新（3秒ごと）
+async function pollJobProgress() {
+    const response = await fetch('/api/jobs?status=running');
+    const jobs = await response.json();
+    jobs.forEach(job => updateProgressBar(job.id, job.progress, job.current_step));
+}
+setInterval(pollJobProgress, 3000);
+```
+
+### ステップ名の日本語表示
+
+```go
+var stepLabels = map[string]string{
+    "uploading":    "アップロード中",
+    "converting":   "音声変換中",
+    "transcribing": "文字起こし中",
+    "saving":       "保存中",
+}
+```
+
+### 優先度
+
+Phase 2完了後、UX改善として実装。
+
+---
+
+## 付録E. 音声ストリーミング処理
+
+### 背景・課題
+
+1. **ReazonSpeechの制限**: 長時間音声を一括処理すると問題が発生
+2. **メモリ問題**: 長時間音声をまとめて処理するとメモリ不足でクラッシュ
+3. **システム負荷**: PC全体が重くなる
+4. **進捗表示**: 長時間処理中に進捗が更新されない
+
+### 解決策
+
+音声データをストリーミングで逐次入力し、リアルタイムに認識結果を取得する。
+
+### ストリーミング vs チャンク分割
+
+| 方式 | メリット | デメリット |
+|------|---------|-----------|
+| **ストリーミング** | 境界問題なし、自然な認識 | 実装がやや複雑 |
+| チャンク分割 | 実装シンプル | オーバーラップ処理が必要 |
+
+→ **ストリーミング方式を採用**
+
+### 処理フロー
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ 入力: audio.wav (10分 = 600秒)                           │
+└──────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│ 1. 音声長を取得 (ffprobe) → 進捗計算用                   │
+└──────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│ 2. WAVファイルをバッファ単位で読み込み                    │
+│                                                          │
+│   while not EOF:                                         │
+│     ├─ バッファ読み込み (例: 0.5秒分 = 8000サンプル)     │
+│     ├─ Recognizerにストリーム入力                        │
+│     ├─ 部分結果を取得・蓄積                              │
+│     └─ 進捗更新: 30 + (60 * 読込済み / 全体長) %        │
+└──────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│ 3. 入力終了を通知 → 最終結果を取得                       │
+└──────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│ 4. 結果を保存                                            │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 設定値
+
+| 項目 | 値 | 説明 |
+|------|-----|------|
+| `BUFFER_DURATION` | 0.5秒 | 1回の読み込みサイズ |
+| `SAMPLE_RATE` | 16000 | サンプリングレート |
+| `BUFFER_SIZE` | 8000 | バッファサンプル数 (0.5秒 × 16000) |
+
+### Sherpa-ONNX ストリーミングAPI
+
+```go
+// Sherpa-ONNX のストリーミング認識
+stream := recognizer.NewStream()
+defer stream.Delete()
+
+for {
+    samples := readNextBuffer(wavFile)  // 0.5秒分読み込み
+    if len(samples) == 0 {
+        break
+    }
+
+    stream.AcceptWaveform(sampleRate, samples)
+
+    for recognizer.IsReady(stream) {
+        recognizer.Decode(stream)
+    }
+
+    // 部分結果を取得（進捗表示用）
+    partialResult := recognizer.GetResult(stream)
+}
+
+// 入力終了を通知
+stream.InputFinished()
+
+// 最終デコード
+for recognizer.IsReady(stream) {
+    recognizer.Decode(stream)
+}
+
+// 最終結果を取得
+finalResult := recognizer.GetResult(stream)
+```
+
+### 進捗計算
+
+```go
+func calculateProgress(bytesRead, totalBytes int64) int {
+    // 30% (開始) → 90% (完了)
+    ratio := float64(bytesRead) / float64(totalBytes)
+    return 30 + int(60*ratio)
+}
+```
+
+### メモリ管理
+
+- 固定サイズバッファ（8000サンプル ≈ 16KB）のみ使用
+- 結果は逐次蓄積（テキストのみなので軽量）
+- 音声全体をメモリに読み込まない
+
+### 実装変更点
+
+#### 1. 変更: TranscribeFile → TranscribeStream
+
+```go
+// internal/asr/recognizer.go
+func (r *Recognizer) TranscribeStream(
+    wavPath string,
+    onProgress func(progressPercent int),
+) (*Result, error) {
+    // 音声長を取得
+    duration, _ := GetAudioDuration(wavPath)
+    totalSamples := int64(duration * float32(r.config.SampleRate))
+
+    // WAVファイルを開く
+    file, _ := os.Open(wavPath)
+    defer file.Close()
+
+    // ストリーム作成
+    stream := r.recognizer.NewStream()
+    defer stream.Delete()
+
+    var processedSamples int64
+    buffer := make([]float32, 8000)  // 0.5秒分
+
+    for {
+        n := readSamples(file, buffer)
+        if n == 0 {
+            break
+        }
+
+        stream.AcceptWaveform(r.config.SampleRate, buffer[:n])
+
+        for r.recognizer.IsReady(stream) {
+            r.recognizer.Decode(stream)
+        }
+
+        processedSamples += int64(n)
+        progress := 30 + int(60*processedSamples/totalSamples)
+        onProgress(progress)
+    }
+
+    stream.InputFinished()
+    // ... 最終結果取得
+}
+```
+
+#### 2. 変更なし: ProcessTranscription
+
+AudioIngesterはTranscribeStreamを呼ぶだけ（インターフェース同じ）
+
+### 期待される効果
+
+| 項目 | 改善前 | 改善後 |
+|------|--------|--------|
+| 10分音声の処理 | クラッシュ/フリーズ | 正常完了 |
+| メモリ使用量 | 音声長に比例 | 一定（〜16KB） |
+| 進捗表示 | 30%で停止 | 0.5秒ごとに更新 |
+| システム負荷 | PC全体が重い | 軽微 |
+| 境界問題 | オーバーラップ必要 | なし |
+
+### 優先度
+
+即座に対応が必要。現状では長い音声ファイルが処理できない。
+
+---
+
 **仕様書 終わり**

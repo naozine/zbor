@@ -25,7 +25,7 @@ func (q *Queries) CleanupCompletedJobs(ctx context.Context, completedAt *time.Ti
 
 const completeJob = `-- name: CompleteJob :exec
 UPDATE processing_jobs
-SET status = 'completed', progress = 100, completed_at = ?
+SET status = 'completed', progress = 100, current_step = NULL, completed_at = ?
 WHERE id = ?
 `
 
@@ -73,9 +73,9 @@ func (q *Queries) CountJobsByStatus(ctx context.Context) ([]CountJobsByStatusRow
 
 const createJob = `-- name: CreateJob :exec
 INSERT INTO processing_jobs (
-    id, source_id, type, status, priority, progress,
+    id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateJobParams struct {
@@ -85,6 +85,7 @@ type CreateJobParams struct {
 	Status      *string    `json:"status"`
 	Priority    *int64     `json:"priority"`
 	Progress    *int64     `json:"progress"`
+	CurrentStep *string    `json:"current_step"`
 	RetryCount  *int64     `json:"retry_count"`
 	Error       *string    `json:"error"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -100,6 +101,7 @@ func (q *Queries) CreateJob(ctx context.Context, arg CreateJobParams) error {
 		arg.Status,
 		arg.Priority,
 		arg.Progress,
+		arg.CurrentStep,
 		arg.RetryCount,
 		arg.Error,
 		arg.CreatedAt,
@@ -136,7 +138,7 @@ func (q *Queries) FailJob(ctx context.Context, arg FailJobParams) error {
 }
 
 const getJobByID = `-- name: GetJobByID :one
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs WHERE id = ?
 `
@@ -151,6 +153,7 @@ func (q *Queries) GetJobByID(ctx context.Context, id string) (ProcessingJob, err
 		&i.Status,
 		&i.Priority,
 		&i.Progress,
+		&i.CurrentStep,
 		&i.RetryCount,
 		&i.Error,
 		&i.CreatedAt,
@@ -161,7 +164,7 @@ func (q *Queries) GetJobByID(ctx context.Context, id string) (ProcessingJob, err
 }
 
 const getJobsBySourceID = `-- name: GetJobsBySourceID :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE source_id = ?
@@ -184,6 +187,7 @@ func (q *Queries) GetJobsBySourceID(ctx context.Context, sourceID *string) ([]Pr
 			&i.Status,
 			&i.Priority,
 			&i.Progress,
+			&i.CurrentStep,
 			&i.RetryCount,
 			&i.Error,
 			&i.CreatedAt,
@@ -204,7 +208,7 @@ func (q *Queries) GetJobsBySourceID(ctx context.Context, sourceID *string) ([]Pr
 }
 
 const getNextQueuedJob = `-- name: GetNextQueuedJob :one
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE status = 'queued'
@@ -222,6 +226,7 @@ func (q *Queries) GetNextQueuedJob(ctx context.Context) (ProcessingJob, error) {
 		&i.Status,
 		&i.Priority,
 		&i.Progress,
+		&i.CurrentStep,
 		&i.RetryCount,
 		&i.Error,
 		&i.CreatedAt,
@@ -232,7 +237,7 @@ func (q *Queries) GetNextQueuedJob(ctx context.Context) (ProcessingJob, error) {
 }
 
 const listJobsByStatus = `-- name: ListJobsByStatus :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 WHERE status = ?
@@ -261,6 +266,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, arg ListJobsByStatusPara
 			&i.Status,
 			&i.Priority,
 			&i.Progress,
+			&i.CurrentStep,
 			&i.RetryCount,
 			&i.Error,
 			&i.CreatedAt,
@@ -281,7 +287,7 @@ func (q *Queries) ListJobsByStatus(ctx context.Context, arg ListJobsByStatusPara
 }
 
 const listRecentJobs = `-- name: ListRecentJobs :many
-SELECT id, source_id, type, status, priority, progress,
+SELECT id, source_id, type, status, priority, progress, current_step,
     retry_count, error, created_at, started_at, completed_at
 FROM processing_jobs
 ORDER BY created_at DESC
@@ -304,6 +310,7 @@ func (q *Queries) ListRecentJobs(ctx context.Context, limit int64) ([]Processing
 			&i.Status,
 			&i.Priority,
 			&i.Progress,
+			&i.CurrentStep,
 			&i.RetryCount,
 			&i.Error,
 			&i.CreatedAt,
@@ -325,7 +332,7 @@ func (q *Queries) ListRecentJobs(ctx context.Context, limit int64) ([]Processing
 
 const retryJob = `-- name: RetryJob :exec
 UPDATE processing_jobs
-SET status = 'queued', retry_count = retry_count + 1, error = NULL
+SET status = 'queued', retry_count = retry_count + 1, error = NULL, current_step = NULL
 WHERE id = ?
 `
 
@@ -361,5 +368,20 @@ type UpdateJobProgressParams struct {
 
 func (q *Queries) UpdateJobProgress(ctx context.Context, arg UpdateJobProgressParams) error {
 	_, err := q.db.ExecContext(ctx, updateJobProgress, arg.Progress, arg.ID)
+	return err
+}
+
+const updateJobProgressWithStep = `-- name: UpdateJobProgressWithStep :exec
+UPDATE processing_jobs SET progress = ?, current_step = ? WHERE id = ?
+`
+
+type UpdateJobProgressWithStepParams struct {
+	Progress    *int64  `json:"progress"`
+	CurrentStep *string `json:"current_step"`
+	ID          string  `json:"id"`
+}
+
+func (q *Queries) UpdateJobProgressWithStep(ctx context.Context, arg UpdateJobProgressWithStepParams) error {
+	_, err := q.db.ExecContext(ctx, updateJobProgressWithStep, arg.Progress, arg.CurrentStep, arg.ID)
 	return err
 }

@@ -41,6 +41,7 @@ func (r *JobRepository) Create(ctx context.Context, job *sqlc.ProcessingJob) err
 		Status:      job.Status,
 		Priority:    job.Priority,
 		Progress:    job.Progress,
+		CurrentStep: job.CurrentStep,
 		RetryCount:  job.RetryCount,
 		Error:       job.Error,
 		CreatedAt:   job.CreatedAt,
@@ -87,6 +88,15 @@ func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress 
 	return r.db.Queries.UpdateJobProgress(ctx, sqlc.UpdateJobProgressParams{
 		Progress: &progress,
 		ID:       id,
+	})
+}
+
+// UpdateProgressWithStep はジョブの進捗とステップを更新
+func (r *JobRepository) UpdateProgressWithStep(ctx context.Context, id string, progress int64, step string) error {
+	return r.db.Queries.UpdateJobProgressWithStep(ctx, sqlc.UpdateJobProgressWithStepParams{
+		Progress:    &progress,
+		CurrentStep: &step,
+		ID:          id,
 	})
 }
 

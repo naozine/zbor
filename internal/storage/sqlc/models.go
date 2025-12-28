@@ -65,6 +65,7 @@ type ProcessingJob struct {
 	Status      *string    `json:"status"`
 	Priority    *int64     `json:"priority"`
 	Progress    *int64     `json:"progress"`
+	CurrentStep *string    `json:"current_step"`
 	RetryCount  *int64     `json:"retry_count"`
 	Error       *string    `json:"error"`
 	CreatedAt   time.Time  `json:"created_at"`

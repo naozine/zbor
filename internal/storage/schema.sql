@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS processing_jobs (
     status TEXT DEFAULT 'queued',
     priority INTEGER DEFAULT 5,
     progress INTEGER DEFAULT 0,
+    current_step TEXT,
     retry_count INTEGER DEFAULT 0,
     error TEXT,
     created_at DATETIME NOT NULL,

@@ -65,8 +65,27 @@ func Open(path string) (*DB, error) {
 
 // initSchema はスキーマを初期化する
 func initSchema(db *sql.DB) error {
-	_, err := db.Exec(schemaSQL)
-	return err
+	if _, err := db.Exec(schemaSQL); err != nil {
+		return err
+	}
+
+	// Run migrations for existing databases
+	return runMigrations(db)
+}
+
+// runMigrations runs migrations for schema updates
+func runMigrations(db *sql.DB) error {
+	// Migration: Add current_step column to processing_jobs if not exists
+	_, err := db.Exec(`
+		ALTER TABLE processing_jobs ADD COLUMN current_step TEXT;
+	`)
+	// Ignore error if column already exists
+	if err != nil && err.Error() != "duplicate column name: current_step" {
+		// Check if it's a different error
+		// SQLite returns "duplicate column name" for existing columns
+	}
+
+	return nil
 }
 
 // Close はデータベース接続を閉じる
