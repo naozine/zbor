@@ -1875,106 +1875,173 @@ VAD検出:  Block1(0-10s)    Block2(30-45s)    Block3(60-80s)
 - ブロックを並列処理して全体時間を短縮
 - メモリ使用量とのトレードオフを考慮
 
-### VAD設定
+### 文字起こしメソッド一覧
 
-#### Silero VAD
+3つのメソッドが利用可能：
+
+| メソッド | 説明 | tempo対応 | 推奨用途 |
+|---------|------|-----------|---------|
+| `vad-block` | VAD検出→ブロック分割→処理 | ✓ | **推奨** |
+| `vad-stream` | VADストリーミング処理 | ✗ | リアルタイム向け |
+| `chunk` | 固定チャンク分割 | ✓ | シンプルな処理 |
+
+### vad-block メソッド（推奨）
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 1. 音声入力                                                  │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. VAD検出（Silero VAD）                                     │
+│    - 発話区間を検出                                          │
+│    - min-silence で無音区間による分割を制御                   │
+│    - vad-threshold で音声検出感度を調整                      │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. ブロック分割（splitLongBlocks）                            │
+│    - max-block 秒を超えるブロックを自動分割                   │
+│    - Sherpa-ONNXは長い音声で冒頭ドロップする問題があるため    │
+│                                                              │
+│    例: max-block=5, VADが20秒ブロック検出                     │
+│    Before: [Block: 0.07-20.00 (19.93s)]                      │
+│    After:  [0.07-5.07] [5.07-10.07] [10.07-15.07] [15.07-20] │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. 各ブロックを処理                                           │
+│    for block in blocks:                                      │
+│      ├─ ffmpegでブロック区間を抽出（-ss -t -i の順序重要）    │
+│      ├─ tempo調整（atempo filter）                           │
+│      ├─ Sherpa-ONNX offline recognizerで文字起こし          │
+│      └─ タイムスタンプを元の音声時刻に変換                    │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 5. 結果マージ                                                 │
+│    - 全ブロックのトークンを時間順でソート                     │
+│    - セグメント生成                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 重要な発見事項
+
+#### Sherpa-ONNX (Transducer) の制限
+
+ReazonSpeech（Transducer/Conformerモデル）は逐次的に音声を読む方式のため、
+長い音声（10秒超）で**冒頭がドロップ**することがある。
+
+**原因:** アライメント（音と文字のタイミング合わせ）で「迷子」になると、
+そこから後ろをすべて無視する挙動がある。
+
+**なぜ5秒か:**
+- 10秒: 途中でアライメントが迷子になり、復帰できずに冒頭が消失
+- 5秒: 迷子になる前に強制リセットがかかるため、復帰できる
+- これは「強制チャンク化（Forced Chunking）」と呼ばれるエンジニアリング手法
+- 5〜8秒が安全圏、10秒以上は不安定
+
+**対策:**
+- `max-block=5` で5秒ごとに強制分割（推奨）
+- `modified_beam_search` でより正確に認識
+
+#### ffmpeg オプション順序
+
+tempo調整時の`-t`オプションの位置が重要：
+
+```bash
+# 正しい: -ss -t を -i の前に置く（入力に適用）
+ffmpeg -ss 10.0 -t 5.0 -i input.wav -af atempo=0.9 ...
+
+# 間違い: -t を -i の後に置く（出力が切れる）
+ffmpeg -i input.wav -ss 10.0 -t 5.0 -af atempo=0.9 ...
+```
+
+### パラメータ設定
+
+#### VAD設定
 
 ```go
 type VADConfig struct {
-    ModelPath     string  // silero_vad.onnx
-    Threshold     float32 // 発話判定閾値 (default: 0.5)
-    MinSpeechDur  float32 // 最小発話長（秒） (default: 0.25)
-    MinSilenceDur float32 // 最小無音長（秒） (default: 0.5)
-    SampleRate    int     // 16000
+    ModelPath          string  // silero_vad.onnx
+    Threshold          float32 // 発話判定閾値 (0.05-1.0, default: 0.5)
+    MinSpeechDuration  float32 // 最小発話長（秒） (default: 0.25)
+    MinSilenceDuration float32 // 最小無音長（秒） (default: 0.5)
+    MaxBlockDuration   float64 // 最大ブロック長（秒） (default: 5.0)
 }
 ```
 
-**出力:**
-```go
-type SpeechBlock struct {
-    StartTime float64 // 発話開始時刻（秒）
-    EndTime   float64 // 発話終了時刻（秒）
-}
-```
+| パラメータ | 説明 | デフォルト | 調整方針 |
+|-----------|------|-----------|---------|
+| `Threshold` | 音声検出感度 | 0.5 | 低いほど敏感（小さい声も検出） |
+| `MinSilenceDuration` | 無音区間での分割閾値 | 0.5 | 大きいほどブロックがマージされる |
+| `MaxBlockDuration` | ブロック最大長 | 5.0 | 0で無効、5秒推奨 |
 
-### ブロック処理
-
-#### 処理単位
-
-- VADで検出されたブロックをそのまま1単位として処理
-- チャンク分割は行わない（境界問題を回避）
-- 長いブロック（>60秒）は将来的に検討
-
-#### タイムスタンプ変換
+#### 認識設定
 
 ```go
-// ブロック内のトークンタイムスタンプを元の音声時刻に変換
-func adjustTimestamp(token Token, blockStart float64, tempo float64) Token {
-    return Token{
-        Text:      token.Text,
-        StartTime: float32(blockStart + float64(token.StartTime)*tempo),
-        Duration:  token.Duration * float32(tempo),
-    }
+type Config struct {
+    // ...
+    DecodingMethod string // "greedy_search" or "modified_beam_search"
+    MaxActivePaths int    // beam searchのパス数 (default: 4)
 }
 ```
 
-### 実装計画
+| パラメータ | 説明 | デフォルト | 備考 |
+|-----------|------|-----------|------|
+| `DecodingMethod` | デコード方式 | greedy_search | modified_beam_searchで精度向上 |
+| `MaxActivePaths` | ビームサーチパス数 | 4 | modified_beam_search時のみ有効 |
+| `Tempo` | 音声速度調整 | 0.95 | 0.5-1.0、低いほど遅く再生して認識 |
 
-#### Phase 1（初期）
+### 推奨設定
 
-1. **VAD統合**
-   - Silero VADモデルのロード
-   - 音声からSpeechBlock配列を取得
+小さい音声も拾いつつ、長いブロックでのドロップを防ぐ設定：
 
-2. **ブロック処理**
-   - ffmpegでブロック区間を抽出
-   - 既存のoffline recognizerで文字起こし
-   - タイムスタンプ調整
-
-3. **結果マージ**
-   - トークン配列を時間順ソート
-   - セグメント再生成
-
-4. **方式切り替え**
-   - 既存のチャンクベース方式（`TranscribeTempo`）は残す
-   - VAD方式（`TranscribeWithVAD`）を新規追加
-   - 呼び出し側で方式を選択可能に
-
-5. **実験コマンド**
-   - `cmd/transcribe-vad/` で単体テスト可能に
-   - 既存 `cmd/transcribe/` はそのまま維持
-
-#### Phase 2（将来）
-
-1. **Recognizer Pool**
-   - 設定可能なプールサイズ
-   - インスタンスの再利用
-
-2. **並列処理**
-   - goroutineでブロック並列処理
-   - 結果チャネルで収集
-
-3. **長時間ブロック対応**
-   - 60秒超のブロックの分割戦略
-
-### 設定パラメータ
-
-```go
-type TranscriptionConfig struct {
-    // VAD設定
-    VADModelPath     string  // Silero VADモデルパス
-    VADThreshold     float32 // 発話判定閾値 (0.5)
-    MinSpeechDur     float32 // 最小発話長 (0.25秒)
-    MinSilenceDur    float32 // 最小無音長 (0.5秒)
-
-    // ASR設定
-    Tempo            float64 // 音声テンポ (0.85-1.0)
-
-    // 将来: 並列処理設定
-    // PoolSize         int     // Recognizerプールサイズ
-    // MaxBlockDuration float64 // 最大ブロック長（秒）
-}
+```bash
+./transcribe-vad -i audio.wav \
+  -method vad-block \
+  -min-silence 6 \
+  -max-block 5 \
+  -vad-threshold 0.1 \
+  -decoding modified_beam_search \
+  -tempo 1.0
 ```
+
+**設定の意図:**
+- `min-silence=6`: 6秒未満の無音はブロックをマージ（小さい音声も含める）
+- `max-block=5`: 長いブロックは5秒ごとに分割（冒頭ドロップ防止）
+- `vad-threshold=0.1`: 感度を高めに（小さい声も検出）
+- `modified_beam_search`: より正確な認識
+
+### 実装ファイル
+
+| ファイル | 説明 |
+|---------|------|
+| `internal/asr/vad_block.go` | VAD+ブロック処理の実装 |
+| `internal/asr/vad.go` | VAD設定とストリーミング処理 |
+| `internal/asr/recognizer.go` | 認識エンジン（DecodingMethod対応） |
+| `internal/asr/config.go` | 設定構造体 |
+| `cmd/transcribe-vad/main.go` | 実験用CLIツール |
+
+### タイムスタンプ変換
+
+各ブロック内で認識されたトークンのタイムスタンプを、元の音声時刻に変換する：
+
+1. ブロック開始時刻を加算
+2. tempo調整がある場合、tempo倍して元の速度に戻す
+
+例: `block.StartTime=10.0`, `tempo=0.9`, トークン内時刻=`2.0`
+→ 元の時刻: `10.0 + 2.0 * 0.9 = 11.8秒`
+
+### 将来の改善案
+
+1. **並列処理**: Recognizer Poolでブロックを並列処理
+2. **適応的分割**: 音声内容に応じた動的なブロック長調整
+3. **TDTデコーダー**: Sherpa-ONNX Issue #2605 で改善されたデコーダーの検討
 
 ### 期待される効果
 

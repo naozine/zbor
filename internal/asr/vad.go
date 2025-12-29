@@ -13,19 +13,21 @@ import (
 
 // VADConfig holds configuration for Voice Activity Detection
 type VADConfig struct {
-	ModelPath         string  // Path to silero_vad.onnx
-	Threshold         float32 // Speech detection threshold (0-1, default 0.5)
-	MinSpeechDuration float32 // Minimum speech duration in seconds (default 0.25)
+	ModelPath          string  // Path to silero_vad.onnx
+	Threshold          float32 // Speech detection threshold (0-1, default 0.5)
+	MinSpeechDuration  float32 // Minimum speech duration in seconds (default 0.25)
 	MinSilenceDuration float32 // Minimum silence duration to split (default 0.5)
+	MaxBlockDuration   float64 // Maximum block duration before splitting (default 5.0)
 }
 
 // DefaultVADConfig returns default VAD configuration
 func DefaultVADConfig(modelPath string) *VADConfig {
 	return &VADConfig{
-		ModelPath:         modelPath,
-		Threshold:         0.5,
-		MinSpeechDuration: 0.25,
+		ModelPath:          modelPath,
+		Threshold:          0.5,
+		MinSpeechDuration:  0.25,
 		MinSilenceDuration: 0.5,
+		MaxBlockDuration:   5.0,
 	}
 }
 

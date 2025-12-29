@@ -33,10 +33,12 @@ func NewRecognizer(config *Config) (*Recognizer, error) {
 				Decoder: config.DecoderPath,
 				Joiner:  config.JoinerPath,
 			},
-			Tokens:    config.TokensPath,
+			Tokens:     config.TokensPath,
 			NumThreads: config.NumThreads,
-			Debug:     0,
+			Debug:      0,
 		},
+		DecodingMethod: config.DecodingMethod,
+		MaxActivePaths: config.MaxActivePaths,
 	}
 
 	// Create recognizer

@@ -17,6 +17,37 @@ type SpeechBlock struct {
 	EndTime   float64 // End time in seconds
 }
 
+// splitLongBlocks splits blocks longer than maxDuration into smaller chunks
+func splitLongBlocks(blocks []SpeechBlock, maxDuration float64) []SpeechBlock {
+	if maxDuration <= 0 {
+		return blocks
+	}
+
+	var result []SpeechBlock
+	for _, block := range blocks {
+		duration := block.EndTime - block.StartTime
+		if duration <= maxDuration {
+			result = append(result, block)
+			continue
+		}
+
+		// Split into chunks of maxDuration
+		start := block.StartTime
+		for start < block.EndTime {
+			end := start + maxDuration
+			if end > block.EndTime {
+				end = block.EndTime
+			}
+			result = append(result, SpeechBlock{
+				StartTime: start,
+				EndTime:   end,
+			})
+			start = end
+		}
+	}
+	return result
+}
+
 // TranscribeWithVADBlock transcribes audio using VAD to detect speech blocks,
 // then processes each block with optional tempo adjustment.
 // This approach avoids chunk boundary issues by processing natural speech units.
@@ -42,6 +73,9 @@ func (r *Recognizer) TranscribeWithVADBlock(inputPath string, vadConfig *VADConf
 			Segments: []Segment{},
 		}, nil
 	}
+
+	// Split long blocks to avoid recognition dropping beginning of audio
+	blocks = splitLongBlocks(blocks, vadConfig.MaxBlockDuration)
 
 	// Debug: print detected blocks
 	for i, b := range blocks {

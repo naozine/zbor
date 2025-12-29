@@ -8,15 +8,16 @@ import (
 
 // Config holds the configuration for the ASR recognizer
 type Config struct {
-	ModelPath    string  // Base directory for the model
-	EncoderPath  string  // Path to encoder.onnx or encoder.int8.onnx
-	DecoderPath  string  // Path to decoder.onnx or decoder.int8.onnx
-	JoinerPath   string  // Path to joiner.onnx or joiner.int8.onnx
-	TokensPath   string  // Path to tokens.txt
-	VADModelPath string  // Path to silero_vad.onnx (optional, for VAD-based transcription)
-	NumThreads   int     // Number of threads for inference
-	SampleRate   int     // Audio sample rate (typically 16000)
-	Tempo        float64 // Audio tempo for fast speech (0.95 = slower, timestamps auto-corrected)
+	ModelPath      string // Base directory for the model
+	EncoderPath    string // Path to encoder.onnx or encoder.int8.onnx
+	DecoderPath    string // Path to decoder.onnx or decoder.int8.onnx
+	JoinerPath     string // Path to joiner.onnx or joiner.int8.onnx
+	TokensPath     string // Path to tokens.txt
+	VADModelPath   string // Path to silero_vad.onnx (optional, for VAD-based transcription)
+	NumThreads     int    // Number of threads for inference
+	SampleRate     int    // Audio sample rate (typically 16000)
+	DecodingMethod string // "greedy_search" (default) or "modified_beam_search"
+	MaxActivePaths int    // Used only when DecodingMethod is modified_beam_search (default: 4)
 }
 
 // DefaultReazonSpeechConfig returns the default configuration for ReazonSpeech model

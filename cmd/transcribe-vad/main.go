@@ -18,17 +18,20 @@ import (
 
 func main() {
 	var (
-		inputFile     = flag.String("i", "", "Input audio file")
-		outputFile    = flag.String("o", "", "Output file (default: stdout)")
-		format        = flag.String("format", "text", "Output format: text, json, srt")
-		modelDir      = flag.String("model", "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01", "Model directory path")
-		vadModelPath  = flag.String("vad", "models/silero_vad.onnx", "VAD model path")
-		vadThreshold  = flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1, lower = more sensitive)")
-		minSilence    = flag.Float64("min-silence", 0.5, "Min silence duration to split blocks (seconds)")
-		tempo         = flag.Float64("tempo", 0.95, "Audio tempo (0.5-1.0, lower = slower for fast speech)")
-		numThreads    = flag.Int("threads", 4, "Number of threads for inference")
-		method        = flag.String("method", "vad-block", "Method: vad-block, vad-stream, chunk")
-		verbose       = flag.Bool("v", false, "Verbose output")
+		inputFile      = flag.String("i", "", "Input audio file")
+		outputFile     = flag.String("o", "", "Output file (default: stdout)")
+		format         = flag.String("format", "text", "Output format: text, json, srt")
+		modelDir       = flag.String("model", "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01", "Model directory path")
+		vadModelPath   = flag.String("vad", "models/silero_vad.onnx", "VAD model path")
+		vadThreshold   = flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1, lower = more sensitive)")
+		minSilence     = flag.Float64("min-silence", 0.5, "Min silence duration to split blocks (seconds)")
+		maxBlock       = flag.Float64("max-block", 5.0, "Max block duration before splitting (seconds, 0=no split)")
+		tempo          = flag.Float64("tempo", 0.95, "Audio tempo (0.5-1.0, lower = slower for fast speech)")
+		numThreads     = flag.Int("threads", 4, "Number of threads for inference")
+		method         = flag.String("method", "vad-block", "Method: vad-block, vad-stream, chunk")
+		decodingMethod = flag.String("decoding", "greedy_search", "Decoding method: greedy_search or modified_beam_search")
+		maxActivePaths = flag.Int("max-paths", 4, "Max active paths for modified_beam_search")
+		verbose        = flag.Bool("v", false, "Verbose output")
 	)
 
 	flag.Usage = func() {
@@ -76,6 +79,8 @@ func main() {
 		os.Exit(1)
 	}
 	config.NumThreads = *numThreads
+	config.DecodingMethod = *decodingMethod
+	config.MaxActivePaths = *maxActivePaths
 
 	// Create recognizer
 	recognizer, err := asr.NewRecognizer(config)
@@ -100,8 +105,9 @@ func main() {
 		vadConfig := asr.DefaultVADConfig(*vadModelPath)
 		vadConfig.Threshold = float32(*vadThreshold)
 		vadConfig.MinSilenceDuration = float32(*minSilence)
+		vadConfig.MaxBlockDuration = *maxBlock
 		if *verbose {
-			fmt.Fprintf(os.Stderr, "Using VAD+block method with tempo=%.2f, vad-threshold=%.2f, min-silence=%.2f\n", *tempo, *vadThreshold, *minSilence)
+			fmt.Fprintf(os.Stderr, "Using VAD+block method with tempo=%.2f, vad-threshold=%.2f, min-silence=%.2f, max-block=%.2f\n", *tempo, *vadThreshold, *minSilence, *maxBlock)
 		}
 		result, err = recognizer.TranscribeWithVADBlock(*inputFile, vadConfig, *tempo, progressCallback)
 
