@@ -19,12 +19,13 @@ import (
 
 // AudioIngester handles audio file ingestion and transcription
 type AudioIngester struct {
-	sourceRepo   *storage.SourceRepository
-	artifactRepo *storage.ArtifactRepository
-	articleRepo  *storage.ArticleRepository
-	jobRepo      *storage.JobRepository
-	asrConfig    *asr.Config
-	dataDir      string
+	sourceRepo        *storage.SourceRepository
+	artifactRepo      *storage.ArtifactRepository
+	articleRepo       *storage.ArticleRepository
+	jobRepo           *storage.JobRepository
+	asrConfig         *asr.Config
+	senseVoiceConfig  *asr.SenseVoiceConfig
+	dataDir           string
 }
 
 // NewAudioIngester creates a new AudioIngester
@@ -36,13 +37,17 @@ func NewAudioIngester(
 	asrConfig *asr.Config,
 	dataDir string,
 ) *AudioIngester {
+	// SenseVoice model path (relative to project root)
+	senseVoiceModelDir := "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+
 	return &AudioIngester{
-		sourceRepo:   sourceRepo,
-		artifactRepo: artifactRepo,
-		articleRepo:  articleRepo,
-		jobRepo:      jobRepo,
-		asrConfig:    asrConfig,
-		dataDir:      dataDir,
+		sourceRepo:        sourceRepo,
+		artifactRepo:      artifactRepo,
+		articleRepo:       articleRepo,
+		jobRepo:           jobRepo,
+		asrConfig:         asrConfig,
+		senseVoiceConfig:  asr.DefaultSenseVoiceConfig(senseVoiceModelDir),
+		dataDir:           dataDir,
 	}
 }
 
@@ -153,7 +158,8 @@ func (i *AudioIngester) Ingest(ctx context.Context, opts IngestOptions) (*Ingest
 
 // CreateTranscriptionJob creates a new transcription job for an existing source
 // Used for retranscription (re-processing an existing source)
-func (i *AudioIngester) CreateTranscriptionJob(ctx context.Context, sourceID string, priority int) (string, error) {
+// model: "reazonspeech" (default), "sensevoice"
+func (i *AudioIngester) CreateTranscriptionJob(ctx context.Context, sourceID string, priority int, model string) (string, error) {
 	// Verify source exists
 	source, err := i.sourceRepo.GetByID(ctx, sourceID)
 	if err != nil {
@@ -168,10 +174,19 @@ func (i *AudioIngester) CreateTranscriptionJob(ctx context.Context, sourceID str
 		return "", fmt.Errorf("failed to update source status: %w", err)
 	}
 
+	// Determine job type based on model
+	jobType := storage.JobTypeTranscribe // default
+	switch model {
+	case storage.ASRModelSenseVoice:
+		jobType = storage.JobTypeTranscribeSenseVoice
+	case storage.ASRModelReazonSpeech:
+		jobType = storage.JobTypeTranscribeReazonSpeech
+	}
+
 	// Create job for processing
 	job := &sqlc.ProcessingJob{
 		SourceID: &sourceID,
-		Type:     storage.JobTypeTranscribe,
+		Type:     jobType,
 		Priority: storage.Ptr(int64(priority)),
 	}
 	if err := i.jobRepo.Create(ctx, job); err != nil {
@@ -225,16 +240,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 	reportProgress(10, "initializing")
 
-	// Create recognizer
-	recognizer, err := asr.NewRecognizer(i.asrConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create recognizer: %w", err)
-	}
-	defer recognizer.Close()
-
-	// Determine transcription method
-	// VADモデルがあれば TranscribeWithVADBlock を使用（本番推奨）
-	useVADBlock := i.asrConfig.VADModelPath != ""
+	// Determine which model to use based on job type
+	useSenseVoice := job.Type == storage.JobTypeTranscribeSenseVoice
 
 	// Process each file
 	var allResults []*asr.Result
@@ -242,58 +249,99 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	if fileCount == 0 {
 		return fmt.Errorf("no audio files in source metadata")
 	}
-	for idx, filePath := range metadata.Files {
-		// Calculate progress: transcribing takes 30-90%
-		// Each file gets an equal share of that range
-		fileProgressStart := 30 + (60 * idx / fileCount)
-		fileProgressEnd := 30 + (60 * (idx + 1) / fileCount)
 
-		var result *asr.Result
+	if useSenseVoice {
+		// === SenseVoice Model ===
+		svRecognizer, err := asr.NewSenseVoiceRecognizer(i.senseVoiceConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create SenseVoice recognizer: %w", err)
+		}
+		defer svRecognizer.Close()
 
-		if useVADBlock {
-			// 【本番用】オーバーラップ付きsilence検出による文字起こし
-			// RMSベースの無音検出 + オーバーラップで連続発話も正確に認識
-			silenceConfig := asr.DefaultSilenceConfig()
-			silenceConfig.SilenceThreshold = 0.0003  // 静かな音声も検出
-			silenceConfig.MinSilenceDuration = 0.5   // 500ms以上の無音で分割
-			silenceConfig.MaxBlockDuration = 10.0    // 10秒チャンク
+		for idx, filePath := range metadata.Files {
+			fileProgressStart := 30 + (60 * idx / fileCount)
+			fileProgressEnd := 30 + (60 * (idx + 1) / fileCount)
 
-			tempo := 1.0   // 通常は速度調整不要
-			overlap := 2.0 // 2秒オーバーラップ
-
-			result, err = recognizer.TranscribeWithOverlap(filePath, silenceConfig, tempo, overlap, func(progress int, step string) {
-				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
+			result, err := svRecognizer.TranscribeFile(filePath, 20, func(progress int, step string) {
+				fileProgress := fileProgressStart + (progress-10)*(fileProgressEnd-fileProgressStart)/80
 				reportProgress(fileProgress, step)
 			})
 			if err != nil {
-				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+				return fmt.Errorf("failed to transcribe %s with SenseVoice: %w", filePath, err)
 			}
-		} else {
-			// Fallback: Convert to WAV and use standard transcription
-			reportProgress(fileProgressStart, "converting")
-			needsConvert, _ := asr.NeedsConversion(filePath)
-			wavPath := filePath
-			if needsConvert {
-				wavPath, err = asr.ConvertToWavTemp(filePath)
+
+			// Add speaker label
+			if idx < len(metadata.Speakers) {
+				result.Speaker = metadata.Speakers[idx]
+			}
+
+			allResults = append(allResults, result)
+		}
+	} else {
+		// === ReazonSpeech Model (default) ===
+		recognizer, err := asr.NewRecognizer(i.asrConfig)
+		if err != nil {
+			return fmt.Errorf("failed to create recognizer: %w", err)
+		}
+		defer recognizer.Close()
+
+		// Determine transcription method
+		// VADモデルがあれば TranscribeWithOverlap を使用（本番推奨）
+		useOverlap := i.asrConfig.VADModelPath != ""
+
+		for idx, filePath := range metadata.Files {
+			// Calculate progress: transcribing takes 30-90%
+			// Each file gets an equal share of that range
+			fileProgressStart := 30 + (60 * idx / fileCount)
+			fileProgressEnd := 30 + (60 * (idx + 1) / fileCount)
+
+			var result *asr.Result
+
+			if useOverlap {
+				// 【本番用】オーバーラップ付きsilence検出による文字起こし
+				// RMSベースの無音検出 + オーバーラップで連続発話も正確に認識
+				silenceConfig := asr.DefaultSilenceConfig()
+				silenceConfig.SilenceThreshold = 0.0003 // 静かな音声も検出
+				silenceConfig.MinSilenceDuration = 0.5  // 500ms以上の無音で分割
+				silenceConfig.MaxBlockDuration = 10.0   // 10秒チャンク
+
+				tempo := 1.0   // 通常は速度調整不要
+				overlap := 2.0 // 2秒オーバーラップ
+
+				result, err = recognizer.TranscribeWithOverlap(filePath, silenceConfig, tempo, overlap, func(progress int, step string) {
+					fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
+					reportProgress(fileProgress, step)
+				})
 				if err != nil {
-					return fmt.Errorf("failed to convert audio: %w", err)
+					return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
 				}
-				defer os.Remove(wavPath)
+			} else {
+				// Fallback: Convert to WAV and use standard transcription
+				reportProgress(fileProgressStart, "converting")
+				needsConvert, _ := asr.NeedsConversion(filePath)
+				wavPath := filePath
+				if needsConvert {
+					wavPath, err = asr.ConvertToWavTemp(filePath)
+					if err != nil {
+						return fmt.Errorf("failed to convert audio: %w", err)
+					}
+					defer os.Remove(wavPath)
+				}
+
+				reportProgress(fileProgressStart+10, "transcribing")
+				result, err = recognizer.TranscribeFile(wavPath)
+				if err != nil {
+					return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+				}
 			}
 
-			reportProgress(fileProgressStart+10, "transcribing")
-			result, err = recognizer.TranscribeFile(wavPath)
-			if err != nil {
-				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+			// Add speaker label
+			if idx < len(metadata.Speakers) {
+				result.Speaker = metadata.Speakers[idx]
 			}
-		}
 
-		// Add speaker label
-		if idx < len(metadata.Speakers) {
-			result.Speaker = metadata.Speakers[idx]
+			allResults = append(allResults, result)
 		}
-
-		allResults = append(allResults, result)
 	}
 
 	reportProgress(90, "saving")

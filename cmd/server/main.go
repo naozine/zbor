@@ -114,11 +114,15 @@ func main() {
 
 	w := worker.NewWorker(jobRepo)
 	// 音声文字起こしハンドラーを登録
-	w.RegisterHandler(storage.JobTypeTranscribe, func(ctx context.Context, job *sqlc.ProcessingJob) error {
+	transcribeHandler := func(ctx context.Context, job *sqlc.ProcessingJob) error {
 		return audioIngester.ProcessTranscription(ctx, job, func(progress int, step string) {
 			_ = jobRepo.UpdateProgressWithStep(ctx, job.ID, int64(progress), step)
 		})
-	})
+	}
+	// Register handler for all transcription job types
+	w.RegisterHandler(storage.JobTypeTranscribe, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeReazonSpeech, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeSenseVoice, transcribeHandler)
 	w.Start(ctx)
 	defer w.Stop()
 

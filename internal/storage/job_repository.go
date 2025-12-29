@@ -166,10 +166,21 @@ func (r *JobRepository) CountByStatus(ctx context.Context) ([]sqlc.CountJobsBySt
 
 // ジョブタイプ
 const (
-	JobTypeTranscribe = "transcribe"
-	JobTypeFetch      = "fetch"
-	JobTypeSummarize  = "summarize"
-	JobTypeDownload   = "download"
+	JobTypeTranscribe = "transcribe" // Default (ReazonSpeech with overlap)
+
+	// Model-specific transcription types
+	JobTypeTranscribeReazonSpeech = "transcribe:reazonspeech"
+	JobTypeTranscribeSenseVoice   = "transcribe:sensevoice"
+
+	JobTypeFetch     = "fetch"
+	JobTypeSummarize = "summarize"
+	JobTypeDownload  = "download"
+)
+
+// ASR Model types
+const (
+	ASRModelReazonSpeech = "reazonspeech"
+	ASRModelSenseVoice   = "sensevoice"
 )
 
 // ジョブステータス

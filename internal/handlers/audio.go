@@ -409,12 +409,32 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	})
 }
 
+// RetranscribeFullRequest represents the request body for full re-transcription
+type RetranscribeFullRequest struct {
+	Model string `json:"model"` // "reazonspeech" (default) or "sensevoice"
+}
+
 // RetranscribeFull handles full re-transcription of audio
 // Deletes existing artifacts and articles, then creates a new transcription job
 // POST /api/audio/:source_id/retranscribe-full
 func (h *AudioHandler) RetranscribeFull(c echo.Context) error {
 	ctx := c.Request().Context()
 	sourceID := c.Param("source_id")
+
+	// Parse request body (optional)
+	var req RetranscribeFullRequest
+	c.Bind(&req) // Ignore error - model will default to empty string
+
+	// Default to reazonspeech if not specified
+	model := req.Model
+	if model == "" {
+		model = storage.ASRModelReazonSpeech
+	}
+
+	// Validate model
+	if model != storage.ASRModelReazonSpeech && model != storage.ASRModelSenseVoice {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid model: must be 'reazonspeech' or 'sensevoice'"})
+	}
 
 	// Get source
 	source, err := h.sourceRepo.GetByID(ctx, sourceID)
@@ -435,8 +455,8 @@ func (h *AudioHandler) RetranscribeFull(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete articles: " + err.Error()})
 	}
 
-	// Create new transcription job via ingester
-	jobID, err := h.ingester.CreateTranscriptionJob(ctx, sourceID, storage.JobPriorityImmediate)
+	// Create new transcription job via ingester with model selection
+	jobID, err := h.ingester.CreateTranscriptionJob(ctx, sourceID, storage.JobPriorityImmediate, model)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create job: " + err.Error()})
 	}
@@ -445,5 +465,6 @@ func (h *AudioHandler) RetranscribeFull(c echo.Context) error {
 		"message":   "Retranscription job created",
 		"source_id": sourceID,
 		"job_id":    jobID,
+		"model":     model,
 	})
 }
