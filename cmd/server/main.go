@@ -77,16 +77,6 @@ func main() {
 		vadModelPath = ""
 	}
 
-	// 音声テンポ（デフォルト: 0.95 = 早口対策）
-	tempo := 0.95
-	if t := os.Getenv("ZBOR_TEMPO"); t != "" {
-		if _, err := fmt.Sscanf(t, "%f", &tempo); err != nil {
-			log.Printf("Invalid ZBOR_TEMPO value: %s, using default 0.95", t)
-			tempo = 0.95
-		}
-	}
-	log.Printf("Audio tempo: %.2f (timestamps auto-corrected)", tempo)
-
 	// リポジトリ作成
 	articleRepo := storage.NewArticleRepository(db)
 	tagRepo := storage.NewTagRepository(db)
@@ -103,7 +93,6 @@ func main() {
 		VADModelPath: vadModelPath,
 		SampleRate:   16000,
 		NumThreads:   4,
-		Tempo:        tempo,
 	}
 
 	// 音声取り込みモジュール

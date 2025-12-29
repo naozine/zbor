@@ -203,9 +203,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	defer recognizer.Close()
 
 	// Determine transcription method
-	// Priority: Tempo (chunk-based) > VAD > Standard
-	useTempo := i.asrConfig.Tempo > 0 && i.asrConfig.Tempo != 1.0
-	useVAD := i.asrConfig.VADModelPath != "" && !useTempo
+	// VADモデルがあれば TranscribeWithVADBlock を使用（本番推奨）
+	useVADBlock := i.asrConfig.VADModelPath != ""
 
 	// Process each file
 	var allResults []*asr.Result
@@ -218,20 +217,17 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 		var result *asr.Result
 
-		if useTempo {
-			// Use tempo-adjusted chunk-based transcription (best for fast speech)
-			result, err = recognizer.TranscribeWithTempo(filePath, i.asrConfig.Tempo, 20, func(progress int, step string) {
-				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
-				reportProgress(fileProgress, step)
-			})
-			if err != nil {
-				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
-			}
-		} else if useVAD {
-			// Use VAD-based transcription (handles ffmpeg conversion internally)
+		if useVADBlock {
+			// 【本番用】VAD+ブロック分割による文字起こし
+			// 推奨パラメータで設定（詳細は docs/specification.md Appendix G 参照）
 			vadConfig := asr.DefaultVADConfig(i.asrConfig.VADModelPath)
-			result, err = recognizer.TranscribeWithVAD(filePath, vadConfig, func(progress int, step string) {
-				// Map internal progress (30-90) to this file's range
+			vadConfig.Threshold = 0.1          // 感度を上げて小さい声も検出
+			vadConfig.MinSilenceDuration = 6.0 // ブロックをマージして小さい音声も含める
+			vadConfig.MaxBlockDuration = 5.0   // 長いブロックを5秒で分割（冒頭ドロップ防止）
+
+			tempo := 1.0 // 通常は速度調整不要
+
+			result, err = recognizer.TranscribeWithVADBlock(filePath, vadConfig, tempo, func(progress int, step string) {
 				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
 				reportProgress(fileProgress, step)
 			})
