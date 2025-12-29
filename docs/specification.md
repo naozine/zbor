@@ -1997,25 +1997,42 @@ type Config struct {
 | `MaxActivePaths` | ビームサーチパス数 | 4 | modified_beam_search時のみ有効 |
 | `Tempo` | 音声速度調整 | 0.95 | 0.5-1.0、低いほど遅く再生して認識 |
 
-### 推奨設定
+### 本番用メソッドと推奨設定
 
-小さい音声も拾いつつ、長いブロックでのドロップを防ぐ設定：
+#### メソッド選択
 
-```bash
-./transcribe-vad -i audio.wav \
-  -method vad-block \
-  -min-silence 6 \
-  -max-block 5 \
-  -vad-threshold 0.1 \
-  -decoding modified_beam_search \
-  -tempo 1.0
+| メソッド | 用途 | 備考 |
+|---------|------|------|
+| `TranscribeWithVADBlock` | **本番用（推奨）** | VAD検出→5秒分割→認識 |
+| `TranscribeWithVAD` | 実験用 | VADストリーミング、tempo未対応 |
+| `TranscribeWithTempo` | 実験用 | 固定チャンク、タイムスタンプ不正確 |
+
+#### 本番推奨パラメータ
+
+```go
+// VAD設定
+vadConfig := asr.DefaultVADConfig(vadModelPath)
+vadConfig.Threshold = 0.1           // 感度を上げて小さい声も検出
+vadConfig.MinSilenceDuration = 6.0  // ブロックをマージして小さい音声も含める
+vadConfig.MaxBlockDuration = 5.0    // 長いブロックを5秒で分割（冒頭ドロップ防止）
+
+// 認識設定
+config.DecodingMethod = ""  // greedy_search（デフォルト、beam_searchは不要）
+tempo := 1.0                // 速度調整なし
+
+// 実行
+result, err := recognizer.TranscribeWithVADBlock(inputPath, vadConfig, tempo, progressCallback)
 ```
 
-**設定の意図:**
-- `min-silence=6`: 6秒未満の無音はブロックをマージ（小さい音声も含める）
-- `max-block=5`: 長いブロックは5秒ごとに分割（冒頭ドロップ防止）
-- `vad-threshold=0.1`: 感度を高めに（小さい声も検出）
-- `modified_beam_search`: より正確な認識
+**パラメータの意図:**
+
+| パラメータ | 推奨値 | デフォルト | 理由 |
+|-----------|-------|-----------|------|
+| `Threshold` | 0.1 | 0.5 | 小さい声も検出するため感度を上げる |
+| `MinSilenceDuration` | 6.0 | 0.5 | 短い無音でブロック分割しない→小さい音声が消えない |
+| `MaxBlockDuration` | 5.0 | 5.0 | Transducerの冒頭ドロップ防止 |
+| `DecodingMethod` | greedy | greedy | beam_searchは精度向上するが必須ではない |
+| `tempo` | 1.0 | - | 通常は速度調整不要 |
 
 ### 実装ファイル
 

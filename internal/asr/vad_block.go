@@ -51,6 +51,17 @@ func splitLongBlocks(blocks []SpeechBlock, maxDuration float64) []SpeechBlock {
 // TranscribeWithVADBlock transcribes audio using VAD to detect speech blocks,
 // then processes each block with optional tempo adjustment.
 // This approach avoids chunk boundary issues by processing natural speech units.
+//
+// 【本番用メソッド】
+// 他のメソッド（TranscribeWithVAD, TranscribeWithTempo）は実験用。
+//
+// 推奨パラメータ:
+//
+//	vadConfig.Threshold = 0.1           // 感度を上げて小さい声も検出
+//	vadConfig.MinSilenceDuration = 6.0  // ブロックをマージして小さい音声も含める
+//	vadConfig.MaxBlockDuration = 5.0    // 長いブロックを5秒で分割（冒頭ドロップ防止）
+//	tempo = 1.0                         // 通常は速度調整不要
+//	config.DecodingMethod = ""          // greedy_search（beam_searchは不要）
 func (r *Recognizer) TranscribeWithVADBlock(inputPath string, vadConfig *VADConfig, tempo float64, onProgress ProgressCallback) (*Result, error) {
 	if tempo <= 0 {
 		tempo = 1.0

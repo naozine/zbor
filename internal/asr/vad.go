@@ -36,6 +36,9 @@ type ProgressCallback func(progressPercent int, currentStep string)
 
 // TranscribeWithVAD transcribes an audio/video file using VAD for efficient processing
 // It uses ffmpeg to convert to raw PCM and VAD to detect speech segments
+//
+// 【実験用】本番では TranscribeWithVADBlock を使用すること。
+// このメソッドはtempo調整未対応で、タイムスタンプ精度に課題あり。
 func (r *Recognizer) TranscribeWithVAD(inputPath string, vadConfig *VADConfig, onProgress ProgressCallback) (*Result, error) {
 	// Get audio duration for progress calculation
 	duration, err := GetAudioDuration(inputPath)

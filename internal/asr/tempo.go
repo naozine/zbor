@@ -11,6 +11,9 @@ import (
 
 // TranscribeWithTempo transcribes audio with optional tempo adjustment for fast speech
 // Uses chunk-based processing (no VAD) for maximum accuracy
+//
+// 【実験用】本番では TranscribeWithVADBlock を使用すること。
+// このメソッドは固定チャンク分割のため、無音区間を跨ぐとタイムスタンプがずれる。
 func (r *Recognizer) TranscribeWithTempo(inputPath string, tempo float64, chunkSec int, onProgress ProgressCallback) (*Result, error) {
 	// Default values
 	if tempo <= 0 {
