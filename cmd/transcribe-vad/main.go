@@ -24,6 +24,7 @@ func main() {
 		modelDir       = flag.String("model", "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01", "Model directory path")
 		vadModelPath   = flag.String("vad", "models/silero_vad.onnx", "VAD model path")
 		vadThreshold   = flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1, lower = more sensitive)")
+		silenceThresh  = flag.Float64("silence-threshold", 0.001, "Silence detection RMS threshold (0-1, lower = more sensitive)")
 		minSilence     = flag.Float64("min-silence", 0.5, "Min silence duration to split blocks (seconds)")
 		maxBlock       = flag.Float64("max-block", 5.0, "Max block duration before splitting (seconds, 0=no split)")
 		tempo          = flag.Float64("tempo", 0.95, "Audio tempo (0.5-1.0, lower = slower for fast speech)")
@@ -43,6 +44,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  vad-block   VAD detects speech blocks, each block transcribed with tempo (recommended)\n")
 		fmt.Fprintf(os.Stderr, "  vad-stream  VAD streaming (existing, no tempo adjustment)\n")
 		fmt.Fprintf(os.Stderr, "  chunk       Fixed chunk-based with tempo (existing)\n")
+		fmt.Fprintf(os.Stderr, "  silence     Energy-based silence detection (more sensitive than VAD)\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method vad-block -tempo 0.9\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method chunk -tempo 0.95\n", os.Args[0])
@@ -127,6 +129,18 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Using chunk method with tempo=%.2f\n", *tempo)
 		}
 		result, err = recognizer.TranscribeWithTempo(*inputFile, *tempo, 20, progressCallback)
+
+	case "silence":
+		// Energy-based silence detection (more sensitive than VAD)
+		silenceConfig := asr.DefaultSilenceConfig()
+		silenceConfig.SilenceThreshold = *silenceThresh
+		silenceConfig.MinSilenceDuration = *minSilence
+		silenceConfig.MaxBlockDuration = *maxBlock
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Using silence detection method with tempo=%.2f, threshold=%.6f, min-silence=%.2f, max-block=%.2f\n",
+				*tempo, silenceConfig.SilenceThreshold, *minSilence, *maxBlock)
+		}
+		result, err = recognizer.TranscribeWithSilenceDetection(*inputFile, silenceConfig, *tempo, progressCallback)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: Unknown method '%s'\n", *method)

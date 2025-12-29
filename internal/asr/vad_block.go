@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
@@ -85,6 +86,17 @@ func (r *Recognizer) TranscribeWithVADBlock(inputPath string, vadConfig *VADConf
 		}, nil
 	}
 
+	// If the first block starts late (>0.5s), add a pre-block from 0
+	// This catches quiet speech at the beginning that VAD might miss
+	preBlockThreshold := 0.5 // seconds
+	if blocks[0].StartTime > preBlockThreshold {
+		preBlock := SpeechBlock{
+			StartTime: 0,
+			EndTime:   blocks[0].StartTime,
+		}
+		blocks = append([]SpeechBlock{preBlock}, blocks...)
+	}
+
 	// Split long blocks to avoid recognition dropping beginning of audio
 	blocks = splitLongBlocks(blocks, vadConfig.MaxBlockDuration)
 
@@ -122,6 +134,13 @@ func (r *Recognizer) TranscribeWithVADBlock(inputPath string, vadConfig *VADConf
 	sort.Slice(allTokens, func(i, j int) bool {
 		return allTokens[i].StartTime < allTokens[j].StartTime
 	})
+
+	// Rebuild text from sorted tokens
+	var textBuilder strings.Builder
+	for _, token := range allTokens {
+		textBuilder.WriteString(token.Text)
+	}
+	allText = textBuilder.String()
 
 	if onProgress != nil {
 		onProgress(90, "finalizing")
