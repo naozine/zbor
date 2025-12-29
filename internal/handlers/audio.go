@@ -227,17 +227,23 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 		return c.String(http.StatusNotFound, "Transcript not found")
 	}
 
-	// Get title and duration from metadata
+	// Get title, filename, and duration from metadata
 	title := "Audio Transcript"
+	filename := ""
 	var totalDuration float64
 	if source.Metadata != nil {
 		var metadata struct {
-			Title    string  `json:"title"`
-			Duration float64 `json:"duration"`
+			Title    string   `json:"title"`
+			Files    []string `json:"files"`
+			Duration float64  `json:"duration"`
 		}
 		if err := json.Unmarshal([]byte(*source.Metadata), &metadata); err == nil {
 			if metadata.Title != "" {
 				title = metadata.Title
+			}
+			// Extract filename from first file path
+			if len(metadata.Files) > 0 {
+				filename = filepath.Base(metadata.Files[0])
 			}
 			totalDuration = metadata.Duration
 		}
@@ -259,7 +265,7 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 		5.0,  // dotsPerSecond
 	)
 
-	return render(c, components.TranscriptSync(sourceID, title, transcript, displaySegments))
+	return render(c, components.TranscriptSync(sourceID, title, filename, transcript, displaySegments))
 }
 
 // RetranscribeRequest represents the request body for partial re-transcription

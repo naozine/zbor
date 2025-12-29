@@ -6,7 +6,7 @@ import (
 	"zbor/web/layouts"
 )
 
-templ TranscriptSync(sourceID string, title string, transcript *asr.Result, displaySegments []asr.DisplaySegment) {
+templ TranscriptSync(sourceID string, title string, filename string, transcript *asr.Result, displaySegments []asr.DisplaySegment) {
 	@layouts.Base(title + " - Transcript Sync") {
 		<!-- Fixed Header with Controls -->
 		<div class="fixed top-0 left-0 right-0 z-50 bg-white shadow-md">
@@ -18,7 +18,12 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
 						</svg>
 					</a>
-					<h1 class="text-lg font-bold text-gray-900 truncate">{ title }</h1>
+					<div class="flex-1 min-w-0">
+						<h1 class="text-lg font-bold text-gray-900 truncate">{ title }</h1>
+						if filename != "" {
+							<p class="text-sm text-gray-500 truncate">{ filename }</p>
+						}
+					</div>
 				</div>
 
 				<!-- Audio Player Controls -->
