@@ -75,6 +75,10 @@ func (r *Recognizer) TranscribeFile(audioPath string) (*Result, error) {
 
 	// Get result
 	result := stream.GetResult()
+	if result == nil {
+		// Return empty result if recognition failed
+		return &Result{}, nil
+	}
 
 	// Extract tokens with timestamps
 	tokens := extractTokens(result)
@@ -121,6 +125,10 @@ func (r *Recognizer) TranscribeBytes(samples []float32, sampleRate int) (*Result
 
 	// Get result
 	result := stream.GetResult()
+	if result == nil {
+		// Return empty result if recognition failed
+		return &Result{}, nil
+	}
 
 	// Extract tokens with timestamps
 	tokens := extractTokens(result)

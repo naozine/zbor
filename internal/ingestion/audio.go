@@ -251,16 +251,17 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 		var result *asr.Result
 
 		if useVADBlock {
-			// 【本番用】VAD+ブロック分割による文字起こし
-			// 推奨パラメータで設定（詳細は docs/specification.md Appendix G 参照）
-			vadConfig := asr.DefaultVADConfig(i.asrConfig.VADModelPath)
-			vadConfig.Threshold = 0.1          // 感度を上げて小さい声も検出
-			vadConfig.MinSilenceDuration = 6.0 // ブロックをマージして小さい音声も含める
-			vadConfig.MaxBlockDuration = 5.0   // 長いブロックを5秒で分割（冒頭ドロップ防止）
+			// 【本番用】オーバーラップ付きsilence検出による文字起こし
+			// RMSベースの無音検出 + オーバーラップで連続発話も正確に認識
+			silenceConfig := asr.DefaultSilenceConfig()
+			silenceConfig.SilenceThreshold = 0.0003  // 静かな音声も検出
+			silenceConfig.MinSilenceDuration = 0.5   // 500ms以上の無音で分割
+			silenceConfig.MaxBlockDuration = 10.0    // 10秒チャンク
 
-			tempo := 1.0 // 通常は速度調整不要
+			tempo := 1.0   // 通常は速度調整不要
+			overlap := 2.0 // 2秒オーバーラップ
 
-			result, err = recognizer.TranscribeWithVADBlock(filePath, vadConfig, tempo, func(progress int, step string) {
+			result, err = recognizer.TranscribeWithOverlap(filePath, silenceConfig, tempo, overlap, func(progress int, step string) {
 				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
 				reportProgress(fileProgress, step)
 			})

@@ -27,6 +27,7 @@ func main() {
 		silenceThresh  = flag.Float64("silence-threshold", 0.001, "Silence detection RMS threshold (0-1, lower = more sensitive)")
 		minSilence     = flag.Float64("min-silence", 0.5, "Min silence duration to split blocks (seconds)")
 		maxBlock       = flag.Float64("max-block", 5.0, "Max block duration before splitting (seconds, 0=no split)")
+		overlap        = flag.Float64("overlap", 0.5, "Overlap duration for overlap method (seconds)")
 		tempo          = flag.Float64("tempo", 0.95, "Audio tempo (0.5-1.0, lower = slower for fast speech)")
 		numThreads     = flag.Int("threads", 4, "Number of threads for inference")
 		method         = flag.String("method", "vad-block", "Method: vad-block, vad-stream, chunk")
@@ -45,6 +46,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  vad-stream  VAD streaming (existing, no tempo adjustment)\n")
 		fmt.Fprintf(os.Stderr, "  chunk       Fixed chunk-based with tempo (existing)\n")
 		fmt.Fprintf(os.Stderr, "  silence     Energy-based silence detection (more sensitive than VAD)\n")
+		fmt.Fprintf(os.Stderr, "  overlap     Silence detection with overlapping chunks (best for continuous speech)\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method vad-block -tempo 0.9\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method chunk -tempo 0.95\n", os.Args[0])
@@ -141,6 +143,18 @@ func main() {
 				*tempo, silenceConfig.SilenceThreshold, *minSilence, *maxBlock)
 		}
 		result, err = recognizer.TranscribeWithSilenceDetection(*inputFile, silenceConfig, *tempo, progressCallback)
+
+	case "overlap":
+		// Silence detection with overlapping chunks
+		silenceConfig := asr.DefaultSilenceConfig()
+		silenceConfig.SilenceThreshold = *silenceThresh
+		silenceConfig.MinSilenceDuration = *minSilence
+		silenceConfig.MaxBlockDuration = *maxBlock
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Using overlap method with tempo=%.2f, threshold=%.6f, max-block=%.2f, overlap=%.2f\n",
+				*tempo, silenceConfig.SilenceThreshold, *maxBlock, *overlap)
+		}
+		result, err = recognizer.TranscribeWithOverlap(*inputFile, silenceConfig, *tempo, *overlap, progressCallback)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: Unknown method '%s'\n", *method)

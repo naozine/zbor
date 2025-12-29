@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // SilenceConfig holds configuration for silence-based speech detection
@@ -182,6 +183,73 @@ func calculateRMS(samples []float32) float64 {
 	return math.Sqrt(sum / float64(len(samples)))
 }
 
+// OverlapBlock represents a block with overlap information for context-aware recognition
+type OverlapBlock struct {
+	SpeechBlock
+	MainStart float64 // Start of the "main" portion (after overlap)
+	MainEnd   float64 // End of the "main" portion (before overlap)
+}
+
+// splitLongBlocksWithOverlap splits blocks with overlap for context
+// overlap is the amount of overlap in seconds (e.g., 0.5s)
+func splitLongBlocksWithOverlap(blocks []SpeechBlock, maxDuration float64, overlap float64) []OverlapBlock {
+	if maxDuration <= 0 {
+		maxDuration = 2.0
+	}
+	if overlap <= 0 {
+		overlap = 0.5
+	}
+
+	var result []OverlapBlock
+	for _, block := range blocks {
+		duration := block.EndTime - block.StartTime
+		if duration <= maxDuration {
+			// No split needed
+			result = append(result, OverlapBlock{
+				SpeechBlock: block,
+				MainStart:   block.StartTime,
+				MainEnd:     block.EndTime,
+			})
+			continue
+		}
+
+		// Split into chunks with overlap
+		// Each chunk: [start, start+maxDuration]
+		// Main portion: [mainStart, mainEnd] where results are kept
+		// Next chunk starts at mainEnd (not start+maxDuration)
+		mainDuration := maxDuration - overlap
+		start := block.StartTime
+
+		for start < block.EndTime {
+			end := start + maxDuration
+			if end > block.EndTime {
+				end = block.EndTime
+			}
+
+			mainStart := start
+			mainEnd := start + mainDuration
+			if mainEnd > block.EndTime {
+				mainEnd = block.EndTime
+			}
+
+			// For the first chunk, mainStart is the actual start
+			// For subsequent chunks, we already have overlap from previous
+			result = append(result, OverlapBlock{
+				SpeechBlock: SpeechBlock{
+					StartTime: start,
+					EndTime:   end,
+				},
+				MainStart: mainStart,
+				MainEnd:   mainEnd,
+			})
+
+			// Next chunk starts at mainEnd (creating overlap)
+			start = mainEnd
+		}
+	}
+	return result
+}
+
 // TranscribeWithSilenceDetection transcribes audio using energy-based silence detection
 // This is an alternative to VAD that detects any sound (not just voice)
 func (r *Recognizer) TranscribeWithSilenceDetection(inputPath string, config *SilenceConfig, tempo float64, onProgress ProgressCallback) (*Result, error) {
@@ -261,6 +329,106 @@ func (r *Recognizer) TranscribeWithSilenceDetection(inputPath string, config *Si
 
 	return &Result{
 		Text:          allText,
+		Tokens:        allTokens,
+		Segments:      tokensToSegments(allTokens),
+		TotalDuration: totalDuration,
+	}, nil
+}
+
+// TranscribeWithOverlap transcribes audio using overlapping chunks
+// This method helps with continuous speech that might get cut at word boundaries
+// overlap is the amount of overlap in seconds (default: 0.5s)
+func (r *Recognizer) TranscribeWithOverlap(inputPath string, config *SilenceConfig, tempo float64, overlap float64, onProgress ProgressCallback) (*Result, error) {
+	if tempo <= 0 {
+		tempo = 1.0
+	}
+	if config == nil {
+		config = DefaultSilenceConfig()
+	}
+	if overlap <= 0 {
+		overlap = 0.5
+	}
+
+	// Step 1: Detect speech blocks using silence detection
+	if onProgress != nil {
+		onProgress(10, "detecting speech")
+	}
+
+	blocks, err := r.detectSpeechBlocksBySilence(inputPath, config)
+	if err != nil {
+		return nil, fmt.Errorf("silence detection failed: %w", err)
+	}
+
+	if len(blocks) == 0 {
+		return &Result{
+			Text:     "",
+			Tokens:   []Token{},
+			Segments: []Segment{},
+		}, nil
+	}
+
+	// If first detected block starts late, extend it to start from 0
+	if len(blocks) > 0 && blocks[0].StartTime > 0.5 {
+		blocks[0].StartTime = 0
+	}
+
+	// Split long blocks WITH OVERLAP
+	overlapBlocks := splitLongBlocksWithOverlap(blocks, config.MaxBlockDuration, overlap)
+
+	// Debug: print detected blocks
+	for i, b := range overlapBlocks {
+		fmt.Fprintf(os.Stderr, "  Block %d: %.2f - %.2f (main: %.2f - %.2f)\n",
+			i+1, b.StartTime, b.EndTime, b.MainStart, b.MainEnd)
+	}
+
+	if onProgress != nil {
+		onProgress(20, fmt.Sprintf("found %d blocks", len(overlapBlocks)))
+	}
+
+	// Step 2: Process each block, keeping only tokens in the "main" portion
+	var allTokens []Token
+
+	for i, block := range overlapBlocks {
+		if onProgress != nil {
+			progress := 20 + int(60*float64(i)/float64(len(overlapBlocks)))
+			onProgress(progress, fmt.Sprintf("transcribing block %d/%d", i+1, len(overlapBlocks)))
+		}
+
+		tokens, _, err := r.transcribeBlock(inputPath, block.SpeechBlock, tempo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to transcribe block %d: %v\n", i+1, err)
+			continue
+		}
+
+		// Filter tokens: only keep those in the "main" portion
+		for _, token := range tokens {
+			tokenTime := float64(token.StartTime)
+			// Keep token if it starts within the main portion
+			if tokenTime >= block.MainStart && tokenTime < block.MainEnd {
+				allTokens = append(allTokens, token)
+			}
+		}
+	}
+
+	if onProgress != nil {
+		onProgress(90, "finalizing")
+	}
+
+	// Rebuild text from tokens
+	var textBuilder strings.Builder
+	for _, token := range allTokens {
+		textBuilder.WriteString(token.Text)
+	}
+
+	// Calculate total duration
+	var totalDuration float32
+	if len(allTokens) > 0 {
+		lastToken := allTokens[len(allTokens)-1]
+		totalDuration = lastToken.StartTime + lastToken.Duration
+	}
+
+	return &Result{
+		Text:          textBuilder.String(),
 		Tokens:        allTokens,
 		Segments:      tokensToSegments(allTokens),
 		TotalDuration: totalDuration,
