@@ -202,8 +202,10 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	}
 	defer recognizer.Close()
 
-	// Check if VAD is available
-	useVAD := i.asrConfig.VADModelPath != ""
+	// Determine transcription method
+	// Priority: Tempo (chunk-based) > VAD > Standard
+	useTempo := i.asrConfig.Tempo > 0 && i.asrConfig.Tempo != 1.0
+	useVAD := i.asrConfig.VADModelPath != "" && !useTempo
 
 	// Process each file
 	var allResults []*asr.Result
@@ -216,7 +218,16 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 		var result *asr.Result
 
-		if useVAD {
+		if useTempo {
+			// Use tempo-adjusted chunk-based transcription (best for fast speech)
+			result, err = recognizer.TranscribeWithTempo(filePath, i.asrConfig.Tempo, 20, func(progress int, step string) {
+				fileProgress := fileProgressStart + (progress-30)*(fileProgressEnd-fileProgressStart)/60
+				reportProgress(fileProgress, step)
+			})
+			if err != nil {
+				return fmt.Errorf("failed to transcribe %s: %w", filePath, err)
+			}
+		} else if useVAD {
 			// Use VAD-based transcription (handles ffmpeg conversion internally)
 			vadConfig := asr.DefaultVADConfig(i.asrConfig.VADModelPath)
 			result, err = recognizer.TranscribeWithVAD(filePath, vadConfig, func(progress int, step string) {

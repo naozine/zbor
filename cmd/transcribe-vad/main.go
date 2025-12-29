@@ -38,6 +38,7 @@ func main() {
 	vadThreshold := flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1)")
 	minSpeech := flag.Float64("min-speech", 0.25, "Minimum speech duration (seconds)")
 	minSilence := flag.Float64("min-silence", 0.5, "Minimum silence duration to split (seconds)")
+	tempo := flag.Float64("tempo", 1.0, "Audio tempo (0.9 = slower for fast speech, timestamps auto-corrected)")
 	flag.Parse()
 
 	if *inputPath == "" {
@@ -96,18 +97,41 @@ func main() {
 	defer recognizer.Close()
 
 	fmt.Println("ASR recognizer initialized")
+
+	// Tempo correction factor (for timestamp adjustment)
+	// If tempo=0.95, audio is slower, timestamps need to be multiplied by 0.95 to get original time
+	tempoFactor := *tempo
+	if *tempo != 1.0 {
+		fmt.Printf("Tempo: %.2f (timestamps will be multiplied by %.2f)\n", *tempo, tempoFactor)
+	}
 	fmt.Println()
 
 	// Start ffmpeg to convert to raw PCM
-	cmd := exec.Command("ffmpeg",
-		"-i", *inputPath,
-		"-f", "s16le",
-		"-acodec", "pcm_s16le",
-		"-ar", fmt.Sprintf("%d", sampleRate),
-		"-ac", "1",
-		"-loglevel", "error",
-		"pipe:1",
-	)
+	var cmd *exec.Cmd
+	if *tempo != 1.0 {
+		// With tempo adjustment
+		cmd = exec.Command("ffmpeg",
+			"-i", *inputPath,
+			"-af", fmt.Sprintf("atempo=%.2f", *tempo),
+			"-f", "s16le",
+			"-acodec", "pcm_s16le",
+			"-ar", fmt.Sprintf("%d", sampleRate),
+			"-ac", "1",
+			"-loglevel", "error",
+			"pipe:1",
+		)
+	} else {
+		// Without tempo adjustment
+		cmd = exec.Command("ffmpeg",
+			"-i", *inputPath,
+			"-f", "s16le",
+			"-acodec", "pcm_s16le",
+			"-ar", fmt.Sprintf("%d", sampleRate),
+			"-ac", "1",
+			"-loglevel", "error",
+			"pipe:1",
+		)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -148,8 +172,13 @@ func main() {
 			segment := vad.Front()
 			vad.Pop()
 
-			startSec := float64(segment.Start) / float64(sampleRate)
-			endSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
+			// Raw timestamps (in slowed audio time)
+			rawStartSec := float64(segment.Start) / float64(sampleRate)
+			rawEndSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
+
+			// Corrected timestamps (in original audio time)
+			startSec := rawStartSec * tempoFactor
+			endSec := rawEndSec * tempoFactor
 			durationSec := endSec - startSec
 
 			fmt.Printf("\n--- Speech segment: %.2f - %.2f sec (%.2fs) ---\n",
@@ -162,8 +191,8 @@ func main() {
 				continue
 			}
 
-			// Adjust token timestamps with segment offset
-			adjustedTokens := adjustTokenTimestamps(result.Tokens, float32(startSec))
+			// Adjust token timestamps with segment offset and tempo correction
+			adjustedTokens := adjustTokenTimestampsWithTempo(result.Tokens, float32(startSec), float32(tempoFactor))
 
 			fmt.Printf("Text: %s\n", result.Text)
 			fmt.Printf("Tokens: %d, Processing: %.2fs\n", len(adjustedTokens), result.Duration)
@@ -195,8 +224,13 @@ func main() {
 		segment := vad.Front()
 		vad.Pop()
 
-		startSec := float64(segment.Start) / float64(sampleRate)
-		endSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
+		// Raw timestamps (in slowed audio time)
+		rawStartSec := float64(segment.Start) / float64(sampleRate)
+		rawEndSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
+
+		// Corrected timestamps (in original audio time)
+		startSec := rawStartSec * tempoFactor
+		endSec := rawEndSec * tempoFactor
 
 		fmt.Printf("\n--- Final segment: %.2f - %.2f sec ---\n", startSec, endSec)
 
@@ -206,8 +240,8 @@ func main() {
 			continue
 		}
 
-		// Adjust token timestamps with segment offset
-		adjustedTokens := adjustTokenTimestamps(result.Tokens, float32(startSec))
+		// Adjust token timestamps with segment offset and tempo correction
+		adjustedTokens := adjustTokenTimestampsWithTempo(result.Tokens, float32(startSec), float32(tempoFactor))
 
 		fmt.Printf("Text: %s\n", result.Text)
 		speechSegments = append(speechSegments, speechSegment{
@@ -280,14 +314,14 @@ type speechSegment struct {
 	tokens []asr.Token // Tokens with adjusted timestamps
 }
 
-// adjustTokenTimestamps adds offset to all token timestamps
-func adjustTokenTimestamps(tokens []asr.Token, offsetSec float32) []asr.Token {
+// adjustTokenTimestampsWithTempo adds offset and applies tempo correction to all token timestamps
+func adjustTokenTimestampsWithTempo(tokens []asr.Token, offsetSec float32, tempoFactor float32) []asr.Token {
 	adjusted := make([]asr.Token, len(tokens))
 	for i, token := range tokens {
 		adjusted[i] = asr.Token{
 			Text:      token.Text,
-			StartTime: token.StartTime + offsetSec,
-			Duration:  token.Duration,
+			StartTime: offsetSec + token.StartTime*tempoFactor,
+			Duration:  token.Duration * tempoFactor,
 		}
 	}
 	return adjusted

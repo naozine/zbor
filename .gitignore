@@ -3,6 +3,8 @@ zbor
 zbor-transcribe
 zbor-youtube
 zbor-webfetch
+transcribe-stream
+transcribe-vad
 *.exe
 *.exe~
 *.dll
