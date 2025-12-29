@@ -103,6 +103,15 @@ func (q *Queries) DeleteArticleFTS(ctx context.Context, articleID string) error 
 	return err
 }
 
+const deleteArticlesBySourceID = `-- name: DeleteArticlesBySourceID :exec
+DELETE FROM articles WHERE source_id = ?
+`
+
+func (q *Queries) DeleteArticlesBySourceID(ctx context.Context, sourceID *string) error {
+	_, err := q.db.ExecContext(ctx, deleteArticlesBySourceID, sourceID)
+	return err
+}
+
 const getArticleByID = `-- name: GetArticleByID :one
 SELECT id, title, content, summary,
     source_type, source_url, author, published_at, language,
@@ -156,6 +165,54 @@ func (q *Queries) GetArticleTags(ctx context.Context, articleID *string) ([]Tag,
 			&i.Name,
 			&i.Color,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getArticlesBySourceID = `-- name: GetArticlesBySourceID :many
+SELECT id, title, content, summary,
+    source_type, source_url, author, published_at, language,
+    created_at, updated_at, status,
+    source_id, parent_id, sections, custom_metadata
+FROM articles WHERE source_id = ?
+`
+
+func (q *Queries) GetArticlesBySourceID(ctx context.Context, sourceID *string) ([]Article, error) {
+	rows, err := q.db.QueryContext(ctx, getArticlesBySourceID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Article{}
+	for rows.Next() {
+		var i Article
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Content,
+			&i.Summary,
+			&i.SourceType,
+			&i.SourceUrl,
+			&i.Author,
+			&i.PublishedAt,
+			&i.Language,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Status,
+			&i.SourceID,
+			&i.ParentID,
+			&i.Sections,
+			&i.CustomMetadata,
 		); err != nil {
 			return nil, err
 		}

@@ -151,6 +151,36 @@ func (i *AudioIngester) Ingest(ctx context.Context, opts IngestOptions) (*Ingest
 	}, nil
 }
 
+// CreateTranscriptionJob creates a new transcription job for an existing source
+// Used for retranscription (re-processing an existing source)
+func (i *AudioIngester) CreateTranscriptionJob(ctx context.Context, sourceID string, priority int) (string, error) {
+	// Verify source exists
+	source, err := i.sourceRepo.GetByID(ctx, sourceID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get source: %w", err)
+	}
+	if source == nil {
+		return "", fmt.Errorf("source not found: %s", sourceID)
+	}
+
+	// Reset source status
+	if err := i.sourceRepo.UpdateStatus(ctx, sourceID, storage.SourceStatusPending); err != nil {
+		return "", fmt.Errorf("failed to update source status: %w", err)
+	}
+
+	// Create job for processing
+	job := &sqlc.ProcessingJob{
+		SourceID: &sourceID,
+		Type:     storage.JobTypeTranscribe,
+		Priority: storage.Ptr(int64(priority)),
+	}
+	if err := i.jobRepo.Create(ctx, job); err != nil {
+		return "", fmt.Errorf("failed to create job: %w", err)
+	}
+
+	return job.ID, nil
+}
+
 // ProcessTranscription processes a transcription job
 // This is called by the worker when processing the job
 func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.ProcessingJob, onProgress ProgressCallback) error {
@@ -209,6 +239,9 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	// Process each file
 	var allResults []*asr.Result
 	fileCount := len(metadata.Files)
+	if fileCount == 0 {
+		return fmt.Errorf("no audio files in source metadata")
+	}
 	for idx, filePath := range metadata.Files {
 		// Calculate progress: transcribing takes 30-90%
 		// Each file gets an equal share of that range

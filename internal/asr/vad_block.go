@@ -253,6 +253,16 @@ func (r *Recognizer) transcribeBlock(inputPath string, block SpeechBlock, tempo 
 		return nil, "", nil
 	}
 
+	// Minimum duration check: blocks shorter than 0.1s (after tempo) cause ONNX model crash
+	// Error: "Invalid input shape" when audio is too short for Conv layer
+	// Note: tempo < 1.0 slows audio down, so resulting duration = duration / tempo
+	minDuration := 0.1 // seconds
+	resultingDuration := duration / tempo
+	if resultingDuration < minDuration {
+		// Skip blocks that are too short to process
+		return nil, "", nil
+	}
+
 	// Use ffmpeg to extract block with tempo adjustment
 	// Note: -ss and -t before -i applies to input (faster seek, duration is input duration)
 	// This ensures tempo filter doesn't get truncated by -t

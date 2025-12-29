@@ -94,3 +94,13 @@ INSERT OR IGNORE INTO article_tags (article_id, tag_id) VALUES (?, ?);
 
 -- name: RemoveArticleTag :exec
 DELETE FROM article_tags WHERE article_id = ? AND tag_id = ?;
+
+-- name: GetArticlesBySourceID :many
+SELECT id, title, content, summary,
+    source_type, source_url, author, published_at, language,
+    created_at, updated_at, status,
+    source_id, parent_id, sections, custom_metadata
+FROM articles WHERE source_id = ?;
+
+-- name: DeleteArticlesBySourceID :exec
+DELETE FROM articles WHERE source_id = ?;

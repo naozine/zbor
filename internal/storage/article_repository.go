@@ -296,3 +296,22 @@ func (r *ArticleRepository) RemoveTag(ctx context.Context, articleID string, tag
 func (r *ArticleRepository) Count(ctx context.Context) (int64, error) {
 	return r.db.Queries.CountArticles(ctx)
 }
+
+// GetBySourceID はソースIDで記事一覧を取得
+func (r *ArticleRepository) GetBySourceID(ctx context.Context, sourceID string) ([]sqlc.Article, error) {
+	return r.db.Queries.GetArticlesBySourceID(ctx, &sourceID)
+}
+
+// DeleteBySourceID はソースIDで記事を削除（FTSも含む）
+func (r *ArticleRepository) DeleteBySourceID(ctx context.Context, sourceID string) error {
+	// まず関連するFTSエントリを削除
+	articles, err := r.GetBySourceID(ctx, sourceID)
+	if err != nil {
+		return err
+	}
+	for _, article := range articles {
+		_ = r.db.Queries.DeleteArticleFTS(ctx, article.ID)
+	}
+	// 記事を削除
+	return r.db.Queries.DeleteArticlesBySourceID(ctx, &sourceID)
+}

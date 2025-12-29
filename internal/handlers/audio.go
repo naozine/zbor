@@ -20,6 +20,8 @@ type AudioHandler struct {
 	ingester     *ingestion.AudioIngester
 	sourceRepo   *storage.SourceRepository
 	artifactRepo *storage.ArtifactRepository
+	articleRepo  *storage.ArticleRepository
+	jobRepo      *storage.JobRepository
 	asrConfig    *asr.Config
 }
 
@@ -28,12 +30,16 @@ func NewAudioHandler(
 	ingester *ingestion.AudioIngester,
 	sourceRepo *storage.SourceRepository,
 	artifactRepo *storage.ArtifactRepository,
+	articleRepo *storage.ArticleRepository,
+	jobRepo *storage.JobRepository,
 	asrConfig *asr.Config,
 ) *AudioHandler {
 	return &AudioHandler{
 		ingester:     ingester,
 		sourceRepo:   sourceRepo,
 		artifactRepo: artifactRepo,
+		articleRepo:  articleRepo,
+		jobRepo:      jobRepo,
 		asrConfig:    asrConfig,
 	}
 }
@@ -394,5 +400,44 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		"time_range":     []float64{startTime, endTime},
 		"tempo":          req.Tempo,
 		"new_tokens":     len(partialResult.Tokens),
+	})
+}
+
+// RetranscribeFull handles full re-transcription of audio
+// Deletes existing artifacts and articles, then creates a new transcription job
+// POST /api/audio/:source_id/retranscribe-full
+func (h *AudioHandler) RetranscribeFull(c echo.Context) error {
+	ctx := c.Request().Context()
+	sourceID := c.Param("source_id")
+
+	// Get source
+	source, err := h.sourceRepo.GetByID(ctx, sourceID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if source == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "source not found"})
+	}
+
+	// Delete existing artifacts by source_id
+	if err := h.artifactRepo.DeleteBySourceID(ctx, sourceID); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete artifacts: " + err.Error()})
+	}
+
+	// Delete existing articles by source_id (includes FTS)
+	if err := h.articleRepo.DeleteBySourceID(ctx, sourceID); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to delete articles: " + err.Error()})
+	}
+
+	// Create new transcription job via ingester
+	jobID, err := h.ingester.CreateTranscriptionJob(ctx, sourceID, storage.JobPriorityImmediate)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create job: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusAccepted, map[string]string{
+		"message":   "Retranscription job created",
+		"source_id": sourceID,
+		"job_id":    jobID,
 	})
 }

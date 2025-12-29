@@ -58,6 +58,17 @@ templ JobList(jobs []sqlc.ProcessingJob) {
 													<span class="text-sm text-gray-500">
 														{ job.CreatedAt.Format("15:04:05") }
 													</span>
+													if job.Status != nil && (*job.Status == "completed" || *job.Status == "failed") && job.SourceID != nil {
+														<button
+															onclick={ retranscribeJob(*job.SourceID) }
+															class="p-1 text-gray-400 hover:text-blue-500 transition-colors"
+															title="Retranscribe"
+														>
+															<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+															</svg>
+														</button>
+													}
 													<button
 														onclick={ deleteJob(job.ID, job.Status) }
 														class="p-1 text-gray-400 hover:text-red-500 transition-colors"
@@ -136,8 +147,30 @@ templ JobList(jobs []sqlc.ProcessingJob) {
 			</div>
 		</div>
 
+		<!-- Retranscribe confirmation modal -->
+		<div id="retranscribe-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
+			<div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+				<div class="px-6 py-4 border-b border-gray-200">
+					<h3 class="text-lg font-medium text-gray-900">Retranscribe</h3>
+				</div>
+				<div class="px-6 py-4">
+					<p class="text-gray-600">Are you sure you want to retranscribe this audio?</p>
+					<p class="text-gray-500 text-sm mt-1">This will delete the existing transcription and create a new one.</p>
+				</div>
+				<div class="px-6 py-4 bg-gray-50 flex justify-end space-x-3 rounded-b-lg">
+					<button onclick="closeRetranscribeModal()" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+						Cancel
+					</button>
+					<button id="confirm-retranscribe-btn" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">
+						Retranscribe
+					</button>
+				</div>
+			</div>
+		</div>
+
 		<script>
 			let deleteJobId = null;
+			let retranscribeSourceId = null;
 
 			function showDeleteModal(jobId, isRunning) {
 				deleteJobId = jobId;
@@ -159,6 +192,20 @@ templ JobList(jobs []sqlc.ProcessingJob) {
 				modal.classList.add('hidden');
 				modal.classList.remove('flex');
 				deleteJobId = null;
+			}
+
+			function showRetranscribeModal(sourceId) {
+				retranscribeSourceId = sourceId;
+				const modal = document.getElementById('retranscribe-modal');
+				modal.classList.remove('hidden');
+				modal.classList.add('flex');
+			}
+
+			function closeRetranscribeModal() {
+				const modal = document.getElementById('retranscribe-modal');
+				modal.classList.add('hidden');
+				modal.classList.remove('flex');
+				retranscribeSourceId = null;
 			}
 
 			document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
@@ -185,10 +232,38 @@ templ JobList(jobs []sqlc.ProcessingJob) {
 				}
 			});
 
+			document.getElementById('confirm-retranscribe-btn').addEventListener('click', async () => {
+				if (!retranscribeSourceId) return;
+
+				try {
+					const response = await fetch(`/api/audio/${retranscribeSourceId}/retranscribe-full`, {
+						method: 'POST'
+					});
+
+					if (response.ok) {
+						closeRetranscribeModal();
+						// Reload the page to show the new job
+						location.reload();
+					} else {
+						const data = await response.json();
+						alert('Failed to start retranscription: ' + (data.error || 'Unknown error'));
+					}
+				} catch (error) {
+					console.error('Error starting retranscription:', error);
+					alert('Failed to start retranscription');
+				}
+			});
+
 			// Close modal when clicking outside
 			document.getElementById('delete-modal').addEventListener('click', (e) => {
 				if (e.target.id === 'delete-modal') {
 					closeDeleteModal();
+				}
+			});
+
+			document.getElementById('retranscribe-modal').addEventListener('click', (e) => {
+				if (e.target.id === 'retranscribe-modal') {
+					closeRetranscribeModal();
 				}
 			});
 
@@ -204,6 +279,10 @@ templ JobList(jobs []sqlc.ProcessingJob) {
 script deleteJob(jobId string, status *string) {
 	const isRunning = status === 'running';
 	showDeleteModal(jobId, isRunning);
+}
+
+script retranscribeJob(sourceId string) {
+	showRetranscribeModal(sourceId);
 }
 
 func getProgress(progress *int64) int {

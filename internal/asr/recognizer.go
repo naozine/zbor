@@ -99,6 +99,14 @@ func (r *Recognizer) TranscribeFile(audioPath string) (*Result, error) {
 
 // TranscribeBytes transcribes audio from raw audio samples
 func (r *Recognizer) TranscribeBytes(samples []float32, sampleRate int) (*Result, error) {
+	// Minimum sample count check: ONNX model crashes with "Invalid input shape" on very short audio
+	// Require at least 0.1 seconds of audio (1600 samples at 16kHz)
+	minSamples := sampleRate / 10 // 0.1 seconds
+	if len(samples) < minSamples {
+		// Return empty result for audio too short to process
+		return &Result{}, nil
+	}
+
 	startTime := time.Now()
 
 	// Create stream
