@@ -133,6 +133,14 @@ func (r *ArtifactRepository) DeleteBySourceID(ctx context.Context, sourceID stri
 	return r.db.Queries.DeleteArtifactsBySourceID(ctx, &sourceID)
 }
 
+// UpdateContent はアーティファクトのコンテンツを更新
+func (r *ArtifactRepository) UpdateContent(ctx context.Context, id, content string) error {
+	return r.db.Queries.UpdateArtifactContent(ctx, sqlc.UpdateArtifactContentParams{
+		Content: &content,
+		ID:      id,
+	})
+}
+
 // ソースステータス定数
 const (
 	SourceStatusPending    = "pending"

@@ -126,11 +126,16 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 										}
 									</span>
 								</div>
-								<!-- ASR Segment info (toggleable) -->
+								<!-- ASR Segment info (toggleable, clickable for selection) -->
 								if len(ds.ASRSegments) > 0 {
-									<div class="segment-info text-xs text-gray-400 ml-20 mb-1">
+									<div class="segment-info text-xs ml-20 mb-1">
 										for _, asrSeg := range ds.ASRSegments {
-											<span class="mr-3">
+											<span
+												class="asr-segment mr-3 px-1 py-0.5 rounded cursor-pointer text-gray-400 hover:bg-blue-100 hover:text-blue-600"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												data-start={ fmt.Sprintf("%.2f", asrSeg.StartTime) }
+												data-end={ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+											>
 												└─ seg{ fmt.Sprintf("%d", asrSeg.Index) }: { fmt.Sprintf("%.2f", asrSeg.StartTime) }-{ fmt.Sprintf("%.2f", asrSeg.EndTime) }
 											</span>
 										}
@@ -149,7 +154,55 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 			</div>
 		</div>
 
-		<audio id="audio" preload="auto">
+		<!-- Selection Bar (hidden by default) -->
+		<div id="selection-bar" class="fixed bottom-0 left-0 right-0 z-50 bg-white shadow-lg border-t border-gray-200 transform translate-y-full transition-transform duration-200">
+			<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+				<div class="flex items-center justify-between">
+					<div class="flex items-center space-x-4">
+						<span class="text-sm text-gray-600">選択中:</span>
+						<span id="selection-info" class="text-sm font-medium text-blue-600">-</span>
+						<button id="clear-selection" class="text-sm text-gray-500 hover:text-gray-700">クリア</button>
+					</div>
+					<div class="flex items-center space-x-4">
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Tempo:</label>
+							<select id="retranscribe-tempo" class="text-sm border-gray-300 rounded-md">
+								<option value="0.5">0.5x (超低速)</option>
+								<option value="0.6">0.6x</option>
+								<option value="0.7">0.7x</option>
+								<option value="0.75">0.75x</option>
+								<option value="0.8">0.8x</option>
+								<option value="0.85" selected>0.85x</option>
+								<option value="0.9">0.9x</option>
+								<option value="0.95">0.95x</option>
+								<option value="1.0">1.0x (通常)</option>
+							</select>
+						</div>
+						<button
+							id="retranscribe-btn"
+							class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+						>
+							再文字起こし
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Processing overlay -->
+		<div id="processing-overlay" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg p-6 shadow-xl">
+				<div class="flex items-center space-x-3">
+					<svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+					<span class="text-gray-700">再文字起こし中...</span>
+				</div>
+			</div>
+		</div>
+
+		<audio id="audio" preload="auto" data-source-id={ sourceID }>
 			<source src={ "/api/audio/" + sourceID + "/stream" } type="audio/wav"/>
 		</audio>
 
@@ -349,6 +402,145 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 			if (savedInterval) {
 				intervalSelect.value = savedInterval;
 			}
+
+			// === Segment Selection for Re-transcription ===
+			const sourceID = audio.dataset.sourceId;
+			const asrSegments = document.querySelectorAll('.asr-segment');
+			const selectionBar = document.getElementById('selection-bar');
+			const selectionInfo = document.getElementById('selection-info');
+			const clearSelectionBtn = document.getElementById('clear-selection');
+			const retranscribeBtn = document.getElementById('retranscribe-btn');
+			const retranscribeTempo = document.getElementById('retranscribe-tempo');
+			const processingOverlay = document.getElementById('processing-overlay');
+
+			let selectedSegments = new Set();
+
+			function updateSelectionUI() {
+				if (selectedSegments.size === 0) {
+					selectionBar.classList.add('translate-y-full');
+					asrSegments.forEach(seg => {
+						seg.classList.remove('bg-orange-100', 'text-orange-700');
+						seg.classList.add('text-gray-400');
+					});
+					return;
+				}
+
+				selectionBar.classList.remove('translate-y-full');
+
+				// Update segment highlighting
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (selectedSegments.has(idx)) {
+						seg.classList.add('bg-orange-100', 'text-orange-700');
+						seg.classList.remove('text-gray-400');
+					} else {
+						seg.classList.remove('bg-orange-100', 'text-orange-700');
+						seg.classList.add('text-gray-400');
+					}
+				});
+
+				// Update selection info
+				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+				const minIdx = sortedIndices[0];
+				const maxIdx = sortedIndices[sortedIndices.length - 1];
+
+				// Find time range
+				let startTime = Infinity, endTime = 0;
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (idx >= minIdx && idx <= maxIdx) {
+						const start = parseFloat(seg.dataset.start);
+						const end = parseFloat(seg.dataset.end);
+						if (start < startTime) startTime = start;
+						if (end > endTime) endTime = end;
+					}
+				});
+
+				const duration = endTime - startTime;
+				selectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+			}
+
+			// Click on ASR segment to toggle selection
+			asrSegments.forEach(seg => {
+				seg.addEventListener('click', (e) => {
+					e.stopPropagation();
+					const idx = parseInt(seg.dataset.segIdx);
+
+					if (e.shiftKey && selectedSegments.size > 0) {
+						// Shift-click: select range
+						const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+						const minIdx = Math.min(sortedIndices[0], idx);
+						const maxIdx = Math.max(sortedIndices[sortedIndices.length - 1], idx);
+						for (let i = minIdx; i <= maxIdx; i++) {
+							selectedSegments.add(i);
+						}
+					} else if (selectedSegments.has(idx)) {
+						selectedSegments.delete(idx);
+					} else {
+						// Ensure contiguous selection
+						if (selectedSegments.size > 0) {
+							const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+							const minIdx = sortedIndices[0];
+							const maxIdx = sortedIndices[sortedIndices.length - 1];
+							if (idx < minIdx - 1 || idx > maxIdx + 1) {
+								// Not adjacent, clear and select new
+								selectedSegments.clear();
+							} else {
+								// Fill the gap
+								for (let i = Math.min(minIdx, idx); i <= Math.max(maxIdx, idx); i++) {
+									selectedSegments.add(i);
+								}
+							}
+						}
+						selectedSegments.add(idx);
+					}
+
+					updateSelectionUI();
+				});
+			});
+
+			// Clear selection
+			clearSelectionBtn.addEventListener('click', () => {
+				selectedSegments.clear();
+				updateSelectionUI();
+			});
+
+			// Retranscribe button
+			retranscribeBtn.addEventListener('click', async () => {
+				if (selectedSegments.size === 0) return;
+
+				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+				const segmentStart = sortedIndices[0];
+				const segmentEnd = sortedIndices[sortedIndices.length - 1];
+				const tempo = parseFloat(retranscribeTempo.value);
+
+				processingOverlay.classList.remove('hidden');
+
+				try {
+					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							segment_start: segmentStart,
+							segment_end: segmentEnd,
+							tempo: tempo
+						})
+					});
+
+					const result = await response.json();
+
+					if (response.ok) {
+						// Reload page to show updated transcript
+						window.location.reload();
+					} else {
+						alert('エラー: ' + (result.error || '再文字起こしに失敗しました'));
+					}
+				} catch (err) {
+					alert('エラー: ' + err.message);
+				} finally {
+					processingOverlay.classList.add('hidden');
+				}
+			});
 		</script>
 	}
 }

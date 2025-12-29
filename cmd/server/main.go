@@ -116,8 +116,8 @@ func main() {
 		dataDir,
 	)
 
-	// AudioHandler（ストリーミング・同期ページ用にリポジトリも渡す）
-	audioHandler := handlers.NewAudioHandler(audioIngester, sourceRepo, artifactRepo)
+	// AudioHandler（ストリーミング・同期ページ用にリポジトリとASR設定も渡す）
+	audioHandler := handlers.NewAudioHandler(audioIngester, sourceRepo, artifactRepo, asrConfig)
 
 	// ワーカー作成・起動
 	ctx, cancel := context.WithCancel(context.Background())
@@ -192,6 +192,7 @@ func main() {
 	// Audio API
 	api.GET("/audio/:source_id/stream", audioHandler.Stream)
 	api.GET("/audio/:source_id/transcript", audioHandler.Transcript)
+	api.POST("/audio/:source_id/retranscribe", audioHandler.Retranscribe)
 
 	// グレースフルシャットダウン
 	go func() {

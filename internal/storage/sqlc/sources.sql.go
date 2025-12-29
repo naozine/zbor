@@ -218,6 +218,20 @@ func (q *Queries) ListSources(ctx context.Context, arg ListSourcesParams) ([]Sou
 	return items, nil
 }
 
+const updateArtifactContent = `-- name: UpdateArtifactContent :exec
+UPDATE processing_artifacts SET content = ? WHERE id = ?
+`
+
+type UpdateArtifactContentParams struct {
+	Content *string `json:"content"`
+	ID      string  `json:"id"`
+}
+
+func (q *Queries) UpdateArtifactContent(ctx context.Context, arg UpdateArtifactContentParams) error {
+	_, err := q.db.ExecContext(ctx, updateArtifactContent, arg.Content, arg.ID)
+	return err
+}
+
 const updateSourceStatus = `-- name: UpdateSourceStatus :exec
 UPDATE sources SET status = ? WHERE id = ?
 `

@@ -37,3 +37,6 @@ DELETE FROM processing_artifacts WHERE id = ?;
 
 -- name: DeleteArtifactsBySourceID :exec
 DELETE FROM processing_artifacts WHERE source_id = ?;
+
+-- name: UpdateArtifactContent :exec
+UPDATE processing_artifacts SET content = ? WHERE id = ?;

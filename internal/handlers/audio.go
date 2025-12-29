@@ -20,6 +20,7 @@ type AudioHandler struct {
 	ingester     *ingestion.AudioIngester
 	sourceRepo   *storage.SourceRepository
 	artifactRepo *storage.ArtifactRepository
+	asrConfig    *asr.Config
 }
 
 // NewAudioHandler creates a new AudioHandler
@@ -27,11 +28,13 @@ func NewAudioHandler(
 	ingester *ingestion.AudioIngester,
 	sourceRepo *storage.SourceRepository,
 	artifactRepo *storage.ArtifactRepository,
+	asrConfig *asr.Config,
 ) *AudioHandler {
 	return &AudioHandler{
 		ingester:     ingester,
 		sourceRepo:   sourceRepo,
 		artifactRepo: artifactRepo,
+		asrConfig:    asrConfig,
 	}
 }
 
@@ -251,4 +254,145 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 	)
 
 	return render(c, components.TranscriptSync(sourceID, title, transcript, displaySegments))
+}
+
+// RetranscribeRequest represents the request body for partial re-transcription
+type RetranscribeRequest struct {
+	SegmentStart int     `json:"segment_start"` // Start segment index (0-based)
+	SegmentEnd   int     `json:"segment_end"`   // End segment index (inclusive)
+	Tempo        float64 `json:"tempo"`         // Audio tempo (0.85-1.0)
+}
+
+// Retranscribe handles partial re-transcription of audio segments
+// POST /api/audio/:source_id/retranscribe
+func (h *AudioHandler) Retranscribe(c echo.Context) error {
+	ctx := c.Request().Context()
+	sourceID := c.Param("source_id")
+
+	// Parse request body
+	var req RetranscribeRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	}
+
+	// Validate tempo
+	if req.Tempo <= 0 || req.Tempo > 1.0 {
+		req.Tempo = 0.95
+	}
+	if req.Tempo < 0.5 {
+		req.Tempo = 0.5
+	}
+
+	// Get source
+	source, err := h.sourceRepo.GetByID(ctx, sourceID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if source == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "source not found"})
+	}
+
+	// Get audio file path from metadata
+	var metadata struct {
+		Files []string `json:"files"`
+	}
+	if source.Metadata == nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no metadata"})
+	}
+	if err := json.Unmarshal([]byte(*source.Metadata), &metadata); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to parse metadata"})
+	}
+	if len(metadata.Files) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no audio files"})
+	}
+	audioPath := metadata.Files[0]
+
+	// Get existing transcript
+	artifacts, err := h.artifactRepo.GetBySourceID(ctx, sourceID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	var transcript *asr.Result
+	var artifactID string
+	for _, artifact := range artifacts {
+		if artifact.Type == storage.ArtifactTypeTranscription && artifact.Content != nil {
+			var result asr.Result
+			if err := json.Unmarshal([]byte(*artifact.Content), &result); err == nil {
+				transcript = &result
+				artifactID = artifact.ID
+				break
+			}
+		}
+	}
+
+	if transcript == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "transcript not found"})
+	}
+
+	// Validate segment indices
+	if len(transcript.Segments) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "no segments in transcript"})
+	}
+	if req.SegmentStart < 0 || req.SegmentStart >= len(transcript.Segments) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid segment_start"})
+	}
+	if req.SegmentEnd < req.SegmentStart || req.SegmentEnd >= len(transcript.Segments) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid segment_end"})
+	}
+
+	// Get time range from segments
+	startTime := transcript.Segments[req.SegmentStart].StartTime
+	endTime := transcript.Segments[req.SegmentEnd].EndTime
+
+	// Create recognizer
+	recognizer, err := asr.NewRecognizer(h.asrConfig)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create recognizer"})
+	}
+	defer recognizer.Close()
+
+	// Perform partial transcription
+	partialResult, err := recognizer.TranscribePartial(audioPath, asr.PartialTranscribeOptions{
+		StartTime: startTime,
+		EndTime:   endTime,
+		Tempo:     req.Tempo,
+		ChunkSec:  20,
+	})
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
+	}
+
+	// Merge tokens
+	mergedTokens := asr.MergeTokens(transcript.Tokens, partialResult.Tokens, startTime, endTime)
+
+	// Merge segments
+	mergedSegments := asr.MergeSegments(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
+
+	// Rebuild text
+	mergedText := asr.RebuildTextFromTokens(mergedTokens)
+
+	// Create updated result
+	updatedResult := &asr.Result{
+		Text:          mergedText,
+		Tokens:        mergedTokens,
+		Segments:      mergedSegments,
+		TotalDuration: transcript.TotalDuration,
+		Duration:      transcript.Duration,
+		Speaker:       transcript.Speaker,
+	}
+
+	// Update artifact
+	artifactContent, _ := json.Marshal(updatedResult)
+	if err := h.artifactRepo.UpdateContent(ctx, artifactID, string(artifactContent)); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to save transcript"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":        "Retranscription completed",
+		"segments_range": []int{req.SegmentStart, req.SegmentEnd},
+		"time_range":     []float64{startTime, endTime},
+		"tempo":          req.Tempo,
+		"new_tokens":     len(partialResult.Tokens),
+	})
 }
