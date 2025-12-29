@@ -1935,9 +1935,14 @@ func adjustTimestamp(token Token, blockStart float64, tempo float64) Token {
    - トークン配列を時間順ソート
    - セグメント再生成
 
-4. **既存コード置き換え**
-   - `TranscribeTempo` → `TranscribeWithVAD`
-   - チャンクベース処理を削除
+4. **方式切り替え**
+   - 既存のチャンクベース方式（`TranscribeTempo`）は残す
+   - VAD方式（`TranscribeWithVAD`）を新規追加
+   - 呼び出し側で方式を選択可能に
+
+5. **実験コマンド**
+   - `cmd/transcribe-vad/` で単体テスト可能に
+   - 既存 `cmd/transcribe/` はそのまま維持
 
 #### Phase 2（将来）
 

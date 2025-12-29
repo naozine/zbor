@@ -1,355 +1,171 @@
-// Experiment: VAD + ASR transcription
-// Uses Silero VAD to detect speech segments, then transcribes only those segments
-// Timestamps are adjusted to be relative to the original audio file
+// Experiment: VAD + ASR transcription comparison tool
+// Compares three methods: vad-block, vad-stream, chunk
 //
 // Usage:
-//   go run ./cmd/transcribe-vad -input audio.mp3
-//   go run ./cmd/transcribe-vad -input audio.mp4 -vad-threshold 0.5
+//   go run ./cmd/transcribe-vad -i audio.mp3 -method vad-block
+//   go run ./cmd/transcribe-vad -i audio.mp3 -method vad-stream
+//   go run ./cmd/transcribe-vad -i audio.mp3 -method chunk
 
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"log"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"time"
 
 	"zbor/internal/asr"
-
-	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
-)
-
-const (
-	sampleRate     = 16000
-	bytesPerSample = 2 // 16-bit PCM
 )
 
 func main() {
-	inputPath := flag.String("input", "", "Input audio/video file")
-	modelDir := flag.String("model", "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01", "ASR model directory")
-	vadModel := flag.String("vad-model", "models/silero_vad.onnx", "VAD model path")
-	vadThreshold := flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1)")
-	minSpeech := flag.Float64("min-speech", 0.25, "Minimum speech duration (seconds)")
-	minSilence := flag.Float64("min-silence", 0.5, "Minimum silence duration to split (seconds)")
-	tempo := flag.Float64("tempo", 1.0, "Audio tempo (0.9 = slower for fast speech, timestamps auto-corrected)")
+	var (
+		inputFile     = flag.String("i", "", "Input audio file")
+		outputFile    = flag.String("o", "", "Output file (default: stdout)")
+		format        = flag.String("format", "text", "Output format: text, json, srt")
+		modelDir      = flag.String("model", "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01", "Model directory path")
+		vadModelPath  = flag.String("vad", "models/silero_vad.onnx", "VAD model path")
+		vadThreshold  = flag.Float64("vad-threshold", 0.5, "VAD speech threshold (0-1, lower = more sensitive)")
+		minSilence    = flag.Float64("min-silence", 0.5, "Min silence duration to split blocks (seconds)")
+		tempo         = flag.Float64("tempo", 0.95, "Audio tempo (0.5-1.0, lower = slower for fast speech)")
+		numThreads    = flag.Int("threads", 4, "Number of threads for inference")
+		method        = flag.String("method", "vad-block", "Method: vad-block, vad-stream, chunk")
+		verbose       = flag.Bool("v", false, "Verbose output")
+	)
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "VAD-based transcription experiment tool\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nMethods:\n")
+		fmt.Fprintf(os.Stderr, "  vad-block   VAD detects speech blocks, each block transcribed with tempo (recommended)\n")
+		fmt.Fprintf(os.Stderr, "  vad-stream  VAD streaming (existing, no tempo adjustment)\n")
+		fmt.Fprintf(os.Stderr, "  chunk       Fixed chunk-based with tempo (existing)\n")
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method vad-block -tempo 0.9\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -i audio.wav -method chunk -tempo 0.95\n", os.Args[0])
+	}
+
 	flag.Parse()
 
-	if *inputPath == "" {
-		log.Fatal("Usage: go run ./cmd/transcribe-vad -input <file>")
+	if *inputFile == "" {
+		fmt.Fprintf(os.Stderr, "Error: Input file is required\n\n")
+		flag.Usage()
+		os.Exit(1)
 	}
 
-	// Check VAD model exists
-	if _, err := os.Stat(*vadModel); os.IsNotExist(err) {
-		log.Fatalf("VAD model not found: %s\nDownload: curl -L -o models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx", *vadModel)
+	if _, err := os.Stat(*inputFile); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error: Input file not found: %s\n", *inputFile)
+		os.Exit(1)
 	}
 
-	// Get audio duration first
-	duration, err := getAudioDuration(*inputPath)
+	if *format != "text" && *format != "json" && *format != "srt" {
+		fmt.Fprintf(os.Stderr, "Error: Invalid format '%s'. Must be: text, json, or srt\n", *format)
+		os.Exit(1)
+	}
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "Method: %s\n", *method)
+		fmt.Fprintf(os.Stderr, "Tempo: %.2f\n", *tempo)
+		fmt.Fprintf(os.Stderr, "Loading model from: %s\n", *modelDir)
+	}
+
+	// Create configuration
+	config, err := asr.NewConfig(*modelDir)
 	if err != nil {
-		log.Fatalf("Failed to get duration: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: Failed to load model config: %v\n", err)
+		os.Exit(1)
 	}
-	fmt.Printf("Audio duration: %.1f seconds\n", duration)
+	config.NumThreads = *numThreads
 
-	// Create VAD
-	vadConfig := sherpa.VadModelConfig{
-		SileroVad: sherpa.SileroVadModelConfig{
-			Model:             *vadModel,
-			Threshold:         float32(*vadThreshold),
-			MinSilenceDuration: float32(*minSilence),
-			MinSpeechDuration:  float32(*minSpeech),
-			WindowSize:        512,
-		},
-		SampleRate: sampleRate,
-		NumThreads: 1,
-		Debug:      0,
-	}
-
-	vad := sherpa.NewVoiceActivityDetector(&vadConfig, 30) // 30 seconds buffer
-	if vad == nil {
-		log.Fatal("Failed to create VAD")
-	}
-	defer sherpa.DeleteVoiceActivityDetector(vad)
-
-	fmt.Printf("VAD initialized (threshold=%.2f, minSpeech=%.2fs, minSilence=%.2fs)\n",
-		*vadThreshold, *minSpeech, *minSilence)
-
-	// Create ASR recognizer
-	asrConfig := &asr.Config{
-		EncoderPath: filepath.Join(*modelDir, "encoder-epoch-99-avg-1.onnx"),
-		DecoderPath: filepath.Join(*modelDir, "decoder-epoch-99-avg-1.onnx"),
-		JoinerPath:  filepath.Join(*modelDir, "joiner-epoch-99-avg-1.onnx"),
-		TokensPath:  filepath.Join(*modelDir, "tokens.txt"),
-		SampleRate:  sampleRate,
-		NumThreads:  4,
-	}
-
-	recognizer, err := asr.NewRecognizer(asrConfig)
+	// Create recognizer
+	recognizer, err := asr.NewRecognizer(config)
 	if err != nil {
-		log.Fatalf("Failed to create recognizer: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: Failed to create recognizer: %v\n", err)
+		os.Exit(1)
 	}
 	defer recognizer.Close()
 
-	fmt.Println("ASR recognizer initialized")
-
-	// Tempo correction factor (for timestamp adjustment)
-	// If tempo=0.95, audio is slower, timestamps need to be multiplied by 0.95 to get original time
-	tempoFactor := *tempo
-	if *tempo != 1.0 {
-		fmt.Printf("Tempo: %.2f (timestamps will be multiplied by %.2f)\n", *tempo, tempoFactor)
-	}
-	fmt.Println()
-
-	// Start ffmpeg to convert to raw PCM
-	var cmd *exec.Cmd
-	if *tempo != 1.0 {
-		// With tempo adjustment
-		cmd = exec.Command("ffmpeg",
-			"-i", *inputPath,
-			"-af", fmt.Sprintf("atempo=%.2f", *tempo),
-			"-f", "s16le",
-			"-acodec", "pcm_s16le",
-			"-ar", fmt.Sprintf("%d", sampleRate),
-			"-ac", "1",
-			"-loglevel", "error",
-			"pipe:1",
-		)
-	} else {
-		// Without tempo adjustment
-		cmd = exec.Command("ffmpeg",
-			"-i", *inputPath,
-			"-f", "s16le",
-			"-acodec", "pcm_s16le",
-			"-ar", fmt.Sprintf("%d", sampleRate),
-			"-ac", "1",
-			"-loglevel", "error",
-			"pipe:1",
-		)
+	// Progress callback
+	progressCallback := func(progress int, step string) {
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "\r[%3d%%] %s", progress, step)
+		}
 	}
 
-	stdout, err := cmd.StdoutPipe()
+	var result *asr.Result
+
+	switch *method {
+	case "vad-block":
+		// New VAD + block-based method with tempo
+		vadConfig := asr.DefaultVADConfig(*vadModelPath)
+		vadConfig.Threshold = float32(*vadThreshold)
+		vadConfig.MinSilenceDuration = float32(*minSilence)
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Using VAD+block method with tempo=%.2f, vad-threshold=%.2f, min-silence=%.2f\n", *tempo, *vadThreshold, *minSilence)
+		}
+		result, err = recognizer.TranscribeWithVADBlock(*inputFile, vadConfig, *tempo, progressCallback)
+
+	case "vad-stream":
+		// Existing VAD streaming method (no tempo)
+		vadConfig := asr.DefaultVADConfig(*vadModelPath)
+		vadConfig.Threshold = float32(*vadThreshold)
+		vadConfig.MinSilenceDuration = float32(*minSilence)
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Using VAD streaming method (no tempo adjustment), vad-threshold=%.2f, min-silence=%.2f\n", *vadThreshold, *minSilence)
+		}
+		result, err = recognizer.TranscribeWithVAD(*inputFile, vadConfig, progressCallback)
+
+	case "chunk":
+		// Existing chunk-based method with tempo
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Using chunk method with tempo=%.2f\n", *tempo)
+		}
+		result, err = recognizer.TranscribeWithTempo(*inputFile, *tempo, 20, progressCallback)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Error: Unknown method '%s'\n", *method)
+		os.Exit(1)
+	}
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
 	if err != nil {
-		log.Fatalf("Failed to get stdout pipe: %v", err)
-	}
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		log.Fatalf("Failed to start ffmpeg: %v", err)
+		fmt.Fprintf(os.Stderr, "Error: Transcription failed: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Process audio through VAD
-	reader := bufio.NewReader(stdout)
-	windowSize := 512 // VAD window size
-	windowBytes := windowSize * bytesPerSample
-
-	startTime := time.Now()
-	var processedSamples int64
-	var speechSegments []speechSegment
-	var allText string
-
-	fmt.Println("Processing with VAD...")
-
-	for {
-		buffer := make([]byte, windowBytes)
-		n, err := io.ReadFull(reader, buffer)
-
-		if n == 0 {
-			break
-		}
-
-		samples := bytesToFloat32(buffer[:n])
-		vad.AcceptWaveform(samples)
-		processedSamples += int64(len(samples))
-
-		// Check for detected speech segments
-		for !vad.IsEmpty() {
-			segment := vad.Front()
-			vad.Pop()
-
-			// Raw timestamps (in slowed audio time)
-			rawStartSec := float64(segment.Start) / float64(sampleRate)
-			rawEndSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
-
-			// Corrected timestamps (in original audio time)
-			startSec := rawStartSec * tempoFactor
-			endSec := rawEndSec * tempoFactor
-			durationSec := endSec - startSec
-
-			fmt.Printf("\n--- Speech segment: %.2f - %.2f sec (%.2fs) ---\n",
-				startSec, endSec, durationSec)
-
-			// Transcribe this segment
-			result, err := recognizer.TranscribeBytes(segment.Samples, sampleRate)
-			if err != nil {
-				log.Printf("Warning: transcription failed: %v", err)
-				continue
-			}
-
-			// Adjust token timestamps with segment offset and tempo correction
-			adjustedTokens := adjustTokenTimestampsWithTempo(result.Tokens, float32(startSec), float32(tempoFactor))
-
-			fmt.Printf("Text: %s\n", result.Text)
-			fmt.Printf("Tokens: %d, Processing: %.2fs\n", len(adjustedTokens), result.Duration)
-
-			speechSegments = append(speechSegments, speechSegment{
-				start:  startSec,
-				end:    endSec,
-				text:   result.Text,
-				tokens: adjustedTokens,
-			})
-			allText += result.Text
-		}
-
-		// Progress
-		progressSec := float64(processedSamples) / float64(sampleRate)
-		progress := progressSec / duration * 100
-		if int(processedSamples)%(sampleRate*5) == 0 { // Every 5 seconds
-			fmt.Printf("Progress: %.1f%% (%.1fs / %.1fs)\n", progress, progressSec, duration)
-		}
-
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			break
-		}
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "Tokens: %d, Segments: %d, Duration: %.2fs\n",
+			len(result.Tokens), len(result.Segments), result.TotalDuration)
 	}
 
-	// Flush remaining
-	vad.Flush()
-	for !vad.IsEmpty() {
-		segment := vad.Front()
-		vad.Pop()
-
-		// Raw timestamps (in slowed audio time)
-		rawStartSec := float64(segment.Start) / float64(sampleRate)
-		rawEndSec := float64(segment.Start+len(segment.Samples)) / float64(sampleRate)
-
-		// Corrected timestamps (in original audio time)
-		startSec := rawStartSec * tempoFactor
-		endSec := rawEndSec * tempoFactor
-
-		fmt.Printf("\n--- Final segment: %.2f - %.2f sec ---\n", startSec, endSec)
-
-		result, err := recognizer.TranscribeBytes(segment.Samples, sampleRate)
+	// Format output
+	var output string
+	switch *format {
+	case "json":
+		output, err = result.FormatAsJSON()
 		if err != nil {
-			log.Printf("Warning: transcription failed: %v", err)
-			continue
+			fmt.Fprintf(os.Stderr, "Error: Failed to format JSON: %v\n", err)
+			os.Exit(1)
 		}
-
-		// Adjust token timestamps with segment offset and tempo correction
-		adjustedTokens := adjustTokenTimestampsWithTempo(result.Tokens, float32(startSec), float32(tempoFactor))
-
-		fmt.Printf("Text: %s\n", result.Text)
-		speechSegments = append(speechSegments, speechSegment{
-			start:  startSec,
-			end:    endSec,
-			text:   result.Text,
-			tokens: adjustedTokens,
-		})
-		allText += result.Text
+	case "srt":
+		output = result.FormatAsSRT()
+	default:
+		output = result.FormatAsText()
 	}
 
-	cmd.Wait()
-
-	// Summary
-	fmt.Printf("\n=== Summary ===\n")
-	fmt.Printf("Total time: %.1fs\n", time.Since(startTime).Seconds())
-	fmt.Printf("Audio duration: %.1fs\n", duration)
-	fmt.Printf("Speech segments: %d\n", len(speechSegments))
-
-	var totalSpeech float64
-	for _, seg := range speechSegments {
-		totalSpeech += seg.end - seg.start
-	}
-	fmt.Printf("Total speech: %.1fs (%.1f%% of audio)\n", totalSpeech, totalSpeech/duration*100)
-
-	fmt.Printf("\n=== Full Transcript ===\n%s\n", allText)
-
-	// Show segments with timestamps
-	fmt.Printf("\n=== Segments ===\n")
-	for i, seg := range speechSegments {
-		fmt.Printf("[%02d] %.2f-%.2f: %s\n", i+1, seg.start, seg.end, seg.text)
-	}
-
-	// Merge all tokens
-	var allTokens []asr.Token
-	for _, seg := range speechSegments {
-		allTokens = append(allTokens, seg.tokens...)
-	}
-
-	// Show sample tokens with adjusted timestamps
-	fmt.Printf("\n=== Sample Tokens (first 10) ===\n")
-	for i, token := range allTokens {
-		if i >= 10 {
-			fmt.Printf("... and %d more tokens\n", len(allTokens)-10)
-			break
+	// Write output
+	if *outputFile != "" {
+		if err := os.WriteFile(*outputFile, []byte(output), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Failed to write output file: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Printf("  %.2fs: %s\n", token.StartTime, token.Text)
-	}
-
-	// Output JSON result (for integration testing)
-	result := &asr.Result{
-		Text:   allText,
-		Tokens: allTokens,
-	}
-	jsonBytes, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Printf("\n=== JSON Result (summary) ===\n")
-	fmt.Printf("Tokens: %d, Text length: %d chars\n", len(result.Tokens), len(result.Text))
-
-	// Save to file
-	outputPath := *inputPath + ".transcript.json"
-	if err := os.WriteFile(outputPath, jsonBytes, 0644); err == nil {
-		fmt.Printf("Saved to: %s\n", outputPath)
-	}
-}
-
-type speechSegment struct {
-	start  float64
-	end    float64
-	text   string
-	tokens []asr.Token // Tokens with adjusted timestamps
-}
-
-// adjustTokenTimestampsWithTempo adds offset and applies tempo correction to all token timestamps
-func adjustTokenTimestampsWithTempo(tokens []asr.Token, offsetSec float32, tempoFactor float32) []asr.Token {
-	adjusted := make([]asr.Token, len(tokens))
-	for i, token := range tokens {
-		adjusted[i] = asr.Token{
-			Text:      token.Text,
-			StartTime: offsetSec + token.StartTime*tempoFactor,
-			Duration:  token.Duration * tempoFactor,
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "Output written to: %s\n", *outputFile)
 		}
+	} else {
+		fmt.Println(output)
 	}
-	return adjusted
-}
-
-func bytesToFloat32(data []byte) []float32 {
-	samples := make([]float32, len(data)/2)
-	for i := 0; i < len(samples); i++ {
-		sample := int16(binary.LittleEndian.Uint16(data[i*2:]))
-		samples[i] = float32(sample) / 32768.0
-	}
-	return samples
-}
-
-func getAudioDuration(path string) (float64, error) {
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		path,
-	)
-
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, err
-	}
-
-	var duration float64
-	fmt.Sscanf(string(output), "%f", &duration)
-	return duration, nil
 }
