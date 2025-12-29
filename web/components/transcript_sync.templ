@@ -6,7 +6,7 @@ import (
 	"zbor/web/layouts"
 )
 
-templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
+templ TranscriptSync(sourceID string, title string, transcript *asr.Result, displaySegments []asr.DisplaySegment) {
 	@layouts.Base(title + " - Transcript Sync") {
 		<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
 			<div class="mb-6">
@@ -19,66 +19,123 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
 			</div>
 
 			<div class="bg-white shadow rounded-lg overflow-hidden">
+				<!-- Header -->
 				<div class="px-6 py-4 border-b border-gray-200">
 					<h1 class="text-xl font-bold text-gray-900">{ title }</h1>
 				</div>
 
-				<!-- Audio Player Controls -->
-				<div class="px-6 py-4 bg-gray-50 border-b border-gray-200">
-					<div class="flex items-center space-x-4">
-						<button
-							id="play-btn"
-							class="flex items-center justify-center w-12 h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
-						>
-							<svg id="play-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-							</svg>
-							<svg id="pause-icon" class="w-6 h-6 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-							</svg>
-						</button>
+				<!-- Sticky Controls -->
+				<div class="sticky top-0 z-10 bg-white border-b border-gray-200 shadow-sm">
+					<!-- Audio Player Controls -->
+					<div class="px-6 py-4 bg-gray-50">
+						<div class="flex items-center space-x-4">
+							<button
+								id="play-btn"
+								class="flex items-center justify-center w-12 h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+							>
+								<svg id="play-icon" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+								</svg>
+								<svg id="pause-icon" class="w-6 h-6 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+								</svg>
+							</button>
 
-						<div class="flex-1">
-							<div class="relative">
-								<input
-									type="range"
-									id="seek-bar"
-									min="0"
-									max="100"
-									value="0"
-									class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-								/>
+							<div class="flex-1">
+								<div class="relative">
+									<input
+										type="range"
+										id="seek-bar"
+										min="0"
+										max="100"
+										value="0"
+										class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+									/>
+								</div>
+								<div class="flex justify-between text-xs text-gray-500 mt-1">
+									<span id="current-time">0:00</span>
+									<span id="total-time">0:00</span>
+								</div>
 							</div>
-							<div class="flex justify-between text-xs text-gray-500 mt-1">
-								<span id="current-time">0:00</span>
-								<span id="total-time">0:00</span>
+
+							<div class="flex items-center space-x-2">
+								<label class="text-sm text-gray-600">Speed:</label>
+								<select id="speed-select" class="text-sm border-gray-300 rounded-md">
+									<option value="0.5">0.5x</option>
+									<option value="0.75">0.75x</option>
+									<option value="1" selected>1x</option>
+									<option value="1.25">1.25x</option>
+									<option value="1.5">1.5x</option>
+									<option value="2">2x</option>
+								</select>
 							</div>
 						</div>
+					</div>
 
+					<!-- Display Options -->
+					<div class="px-6 py-2 bg-gray-100 flex items-center space-x-6 text-sm">
 						<div class="flex items-center space-x-2">
-							<label class="text-sm text-gray-600">Speed:</label>
-							<select id="speed-select" class="text-sm border-gray-300 rounded-md">
-								<option value="0.5">0.5x</option>
-								<option value="0.75">0.75x</option>
-								<option value="1" selected>1x</option>
-								<option value="1.25">1.25x</option>
-								<option value="1.5">1.5x</option>
-								<option value="2">2x</option>
+							<label class="text-gray-600">Interval:</label>
+							<select id="interval-select" class="text-sm border-gray-300 rounded-md">
+								<option value="5">5s</option>
+								<option value="10" selected>10s</option>
+								<option value="30">30s</option>
+								<option value="60">60s</option>
 							</select>
 						</div>
+						<label class="flex items-center space-x-2 cursor-pointer">
+							<input type="checkbox" id="show-segments" class="rounded border-gray-300" checked/>
+							<span class="text-gray-600">Show segment info</span>
+						</label>
 					</div>
 				</div>
 
-				<!-- Transcript -->
+				<!-- Transcript Timeline -->
 				<div class="px-6 py-6">
-					<div id="transcript" class="text-lg leading-relaxed">
-						for i, token := range transcript.Tokens {
-							<span
-								class="token cursor-pointer hover:bg-blue-100 rounded px-0.5 transition-colors"
-								data-index={ fmt.Sprintf("%d", i) }
-								data-start={ fmt.Sprintf("%.3f", token.StartTime) }
-							>{ token.Text }</span>
+					<div id="transcript" class="space-y-2 font-mono text-sm">
+						for _, ds := range displaySegments {
+							<div
+								class="display-segment"
+								data-seg-index={ fmt.Sprintf("%d", ds.Index) }
+								data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+								data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+							>
+								<!-- Main timeline row -->
+								<div class="flex hover:bg-gray-50 rounded py-1">
+									<span
+										class="time-label text-gray-400 mr-3 whitespace-nowrap cursor-pointer hover:text-blue-600"
+										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+									>
+										[{ asr.FormatTimeRange(ds.StartTime, ds.EndTime) }]
+									</span>
+									<span class="flex-1 flex flex-wrap">
+										for _, elem := range ds.Elements {
+											if elem.Type == "text" {
+												<span
+													class="token cursor-pointer hover:bg-blue-100 rounded transition-colors"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+												>{ elem.Text }</span>
+											} else {
+												<span
+													class="silence text-gray-300 cursor-pointer hover:text-gray-400"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+												>{ elem.Text }</span>
+											}
+										}
+									</span>
+								</div>
+								<!-- ASR Segment info (toggleable) -->
+								if len(ds.ASRSegments) > 0 {
+									<div class="segment-info text-xs text-gray-400 ml-20 mb-1">
+										for _, asrSeg := range ds.ASRSegments {
+											<span class="mr-3">
+												└─ seg{ fmt.Sprintf("%d", asrSeg.Index) }: { fmt.Sprintf("%.2f", asrSeg.StartTime) }-{ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+											</span>
+										}
+									</div>
+								}
+							</div>
 						}
 					</div>
 				</div>
@@ -104,9 +161,16 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
 			const currentTimeEl = document.getElementById('current-time');
 			const totalTimeEl = document.getElementById('total-time');
 			const speedSelect = document.getElementById('speed-select');
+			const intervalSelect = document.getElementById('interval-select');
+			const showSegmentsCheckbox = document.getElementById('show-segments');
 			const tokens = document.querySelectorAll('.token');
+			const silences = document.querySelectorAll('.silence');
+			const timeLabels = document.querySelectorAll('.time-label');
+			const displaySegments = document.querySelectorAll('.display-segment');
+			const segmentInfos = document.querySelectorAll('.segment-info');
 
 			let currentTokenIndex = -1;
+			let currentSegmentIndex = -1;
 
 			// Format time as M:SS
 			function formatTime(seconds) {
@@ -126,31 +190,62 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
 				}
 			}
 
-			// Highlight current token based on audio time
+			// Toggle segment info visibility
+			function updateSegmentInfoVisibility() {
+				const show = showSegmentsCheckbox.checked;
+				segmentInfos.forEach(info => {
+					info.style.display = show ? 'block' : 'none';
+				});
+			}
+			showSegmentsCheckbox.addEventListener('change', updateSegmentInfoVisibility);
+			updateSegmentInfoVisibility();
+
+			// Highlight current token and segment based on audio time
 			function updateHighlight() {
 				const currentTime = audio.currentTime;
-				let newIndex = -1;
+				let newTokenIndex = -1;
+				let newSegmentIndex = -1;
 
+				// Find current token
 				for (let i = tokens.length - 1; i >= 0; i--) {
 					const startTime = parseFloat(tokens[i].dataset.start);
 					if (currentTime >= startTime) {
-						newIndex = i;
+						newTokenIndex = i;
 						break;
 					}
 				}
 
-				if (newIndex !== currentTokenIndex) {
-					// Remove old highlight
+				// Find current display segment
+				for (let i = displaySegments.length - 1; i >= 0; i--) {
+					const startTime = parseFloat(displaySegments[i].dataset.start);
+					const endTime = parseFloat(displaySegments[i].dataset.end);
+					if (currentTime >= startTime && currentTime < endTime) {
+						newSegmentIndex = i;
+						break;
+					}
+				}
+
+				// Update token highlight
+				if (newTokenIndex !== currentTokenIndex) {
 					if (currentTokenIndex >= 0 && currentTokenIndex < tokens.length) {
 						tokens[currentTokenIndex].classList.remove('bg-yellow-200');
 					}
-					// Add new highlight
-					if (newIndex >= 0) {
-						tokens[newIndex].classList.add('bg-yellow-200');
-						// Scroll into view if needed
-						tokens[newIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+					if (newTokenIndex >= 0) {
+						tokens[newTokenIndex].classList.add('bg-yellow-200');
 					}
-					currentTokenIndex = newIndex;
+					currentTokenIndex = newTokenIndex;
+				}
+
+				// Update segment highlight
+				if (newSegmentIndex !== currentSegmentIndex) {
+					if (currentSegmentIndex >= 0 && currentSegmentIndex < displaySegments.length) {
+						displaySegments[currentSegmentIndex].classList.remove('bg-blue-50');
+					}
+					if (newSegmentIndex >= 0) {
+						displaySegments[newSegmentIndex].classList.add('bg-blue-50');
+						displaySegments[newSegmentIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+					}
+					currentSegmentIndex = newSegmentIndex;
 				}
 			}
 
@@ -188,10 +283,36 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
 				audio.playbackRate = parseFloat(speedSelect.value);
 			});
 
+			// Interval change - reload with new interval
+			intervalSelect.addEventListener('change', () => {
+				const interval = intervalSelect.value;
+				const url = new URL(window.location.href);
+				url.searchParams.set('interval', interval);
+				window.location.href = url.toString();
+			});
+
 			// Click on token to seek
 			tokens.forEach(token => {
 				token.addEventListener('click', () => {
 					const startTime = parseFloat(token.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Click on silence to seek
+			silences.forEach(silence => {
+				silence.addEventListener('click', () => {
+					const startTime = parseFloat(silence.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Click on time label to seek
+			timeLabels.forEach(label => {
+				label.addEventListener('click', () => {
+					const startTime = parseFloat(label.dataset.start);
 					audio.currentTime = startTime;
 					audio.play();
 				});
@@ -220,6 +341,13 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result) {
 						break;
 				}
 			});
+
+			// Restore interval from URL
+			const urlParams = new URLSearchParams(window.location.search);
+			const savedInterval = urlParams.get('interval');
+			if (savedInterval) {
+				intervalSelect.value = savedInterval;
+			}
 		</script>
 	}
 }

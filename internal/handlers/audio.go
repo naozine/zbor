@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"zbor/internal/asr"
 	"zbor/internal/ingestion"
@@ -179,6 +180,14 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 	ctx := c.Request().Context()
 	sourceID := c.Param("source_id")
 
+	// Parse interval parameter (default 10 seconds)
+	intervalSec := 10.0
+	if intervalStr := c.QueryParam("interval"); intervalStr != "" {
+		if v, err := strconv.ParseFloat(intervalStr, 64); err == nil && v > 0 {
+			intervalSec = v
+		}
+	}
+
 	// Get source
 	source, err := h.sourceRepo.GetByID(ctx, sourceID)
 	if err != nil {
@@ -209,16 +218,37 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 		return c.String(http.StatusNotFound, "Transcript not found")
 	}
 
-	// Get title from metadata
+	// Get title and duration from metadata
 	title := "Audio Transcript"
+	var totalDuration float64
 	if source.Metadata != nil {
 		var metadata struct {
-			Title string `json:"title"`
+			Title    string  `json:"title"`
+			Duration float64 `json:"duration"`
 		}
-		if err := json.Unmarshal([]byte(*source.Metadata), &metadata); err == nil && metadata.Title != "" {
-			title = metadata.Title
+		if err := json.Unmarshal([]byte(*source.Metadata), &metadata); err == nil {
+			if metadata.Title != "" {
+				title = metadata.Title
+			}
+			totalDuration = metadata.Duration
 		}
 	}
 
-	return render(c, components.TranscriptSync(sourceID, title, transcript))
+	// Estimate duration from tokens if not available
+	if totalDuration <= 0 && len(transcript.Tokens) > 0 {
+		lastToken := transcript.Tokens[len(transcript.Tokens)-1]
+		totalDuration = float64(lastToken.StartTime + lastToken.Duration + 1.0)
+	}
+
+	// Generate display segments for timeline view
+	displaySegments := asr.GenerateDisplaySegments(
+		transcript.Tokens,
+		transcript.Segments,
+		totalDuration,
+		intervalSec,
+		0.3,  // silenceThreshold
+		5.0,  // dotsPerSecond
+	)
+
+	return render(c, components.TranscriptSync(sourceID, title, transcript, displaySegments))
 }
