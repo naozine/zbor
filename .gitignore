@@ -47,3 +47,8 @@ Thumbs.db
 #
 output/
 models/
+
+# Test audio files (not public)
+**/testdata/*.wav
+**/testdata/*.mp3
+**/testdata/*.m4a
