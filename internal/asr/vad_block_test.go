@@ -77,6 +77,82 @@ func TestTranscribeWithVADBlock_Mezurashii(t *testing.T) {
 	t.Logf("Tokens: %d, Segments: %d", len(result.Tokens), len(result.Segments))
 }
 
+// TestTranscribeWithVADBlock_TimestampAccuracy tests that timestamps are accurate
+// across silent regions. The chunk-based method incorrectly places "な" at ~20s
+// (in the middle of silence), while VAD+block correctly places it at ~29s.
+//
+// Audio: "...ます" → ~20s silence → "なんか..."
+// Expected: "な" at ~29s (after silence)
+// Bug (chunk): "な" at ~20s (middle of silence)
+func TestTranscribeWithVADBlock_TimestampAccuracy(t *testing.T) {
+	projectRoot := findProjectRoot(t)
+	testAudio := filepath.Join(projectRoot, "internal/asr/testdata/problem_section.wav")
+	modelDir := filepath.Join(projectRoot, "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01")
+	vadModel := filepath.Join(projectRoot, "models/silero_vad.onnx")
+
+	// Skip if files don't exist
+	if _, err := os.Stat(testAudio); os.IsNotExist(err) {
+		t.Skip("Test audio not found: testdata/problem_section.wav (local test only)")
+	}
+	if _, err := os.Stat(modelDir); os.IsNotExist(err) {
+		t.Skip("Model not found: " + modelDir)
+	}
+	if _, err := os.Stat(vadModel); os.IsNotExist(err) {
+		t.Skip("VAD model not found: " + vadModel)
+	}
+
+	config, err := NewConfig(modelDir)
+	if err != nil {
+		t.Fatalf("Failed to create config: %v", err)
+	}
+	// Use greedy_search (default) for this test
+
+	recognizer, err := NewRecognizer(config)
+	if err != nil {
+		t.Fatalf("Failed to create recognizer: %v", err)
+	}
+	defer recognizer.Close()
+
+	vadConfig := DefaultVADConfig(vadModel)
+	vadConfig.Threshold = 0.1
+	vadConfig.MinSilenceDuration = 6.0
+	vadConfig.MaxBlockDuration = 5.0
+
+	result, err := recognizer.TranscribeWithVADBlock(testAudio, vadConfig, 1.0, nil)
+	if err != nil {
+		t.Fatalf("Transcription failed: %v", err)
+	}
+
+	// Find tokens that should be in the second speech block (after silence)
+	// These should be after 25s, not in the middle of silence at ~20s
+	// Look for "何", "か", "こ" which are part of "何かこっちで"
+	targetTokens := []string{"何", "か", "こ", "な"}
+	var found bool
+	for _, token := range result.Tokens {
+		for _, target := range targetTokens {
+			if strings.Contains(token.Text, target) {
+				if token.StartTime < 25.0 {
+					t.Errorf("Token %q at %.2fs is in the silent region (should be > 25s)",
+						token.Text, token.StartTime)
+				} else {
+					t.Logf("Token %q correctly placed at %.2fs", token.Text, token.StartTime)
+					found = true
+				}
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("Expected tokens not found in result: %s", result.Text)
+	}
+
+	t.Logf("Transcription result: %s", result.Text)
+}
+
 // TestSplitLongBlocks tests the block splitting logic
 func TestSplitLongBlocks(t *testing.T) {
 	tests := []struct {
