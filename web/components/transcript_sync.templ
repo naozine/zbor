@@ -128,16 +128,23 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 								</div>
 								<!-- ASR Segment info (toggleable, clickable for selection) -->
 								if len(ds.ASRSegments) > 0 {
-									<div class="segment-info text-xs ml-20 mb-1">
+									<div class="segment-info text-xs ml-20 mb-1 flex items-center flex-wrap">
 										for _, asrSeg := range ds.ASRSegments {
 											<span
-												class="asr-segment mr-3 px-1 py-0.5 rounded cursor-pointer text-gray-400 hover:bg-blue-100 hover:text-blue-600"
+												class="asr-segment mr-1 px-1 py-0.5 rounded cursor-pointer text-gray-400 hover:bg-blue-100 hover:text-blue-600"
 												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
 												data-start={ fmt.Sprintf("%.2f", asrSeg.StartTime) }
 												data-end={ fmt.Sprintf("%.2f", asrSeg.EndTime) }
 											>
 												└─ seg{ fmt.Sprintf("%d", asrSeg.Index) }: { fmt.Sprintf("%.2f", asrSeg.StartTime) }-{ fmt.Sprintf("%.2f", asrSeg.EndTime) }
 											</span>
+											<button
+												class="json-btn mr-3 px-1 py-0.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded text-[10px] font-mono"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												title="Show JSON"
+											>
+												{ "{}" }
+											</button>
 										}
 									</div>
 								}
@@ -198,6 +205,23 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 					</svg>
 					<span class="text-gray-700">再文字起こし中...</span>
+				</div>
+			</div>
+		</div>
+
+		<!-- JSON Modal -->
+		<div id="json-modal" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+				<div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+					<h3 id="json-modal-title" class="font-medium text-gray-900">Segment Details</h3>
+					<button id="json-modal-close" class="text-gray-400 hover:text-gray-600">
+						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+				</div>
+				<div class="p-4 overflow-auto flex-1">
+					<pre id="json-modal-content" class="text-xs font-mono bg-gray-50 p-3 rounded overflow-x-auto whitespace-pre-wrap"></pre>
 				</div>
 			</div>
 		</div>
@@ -403,8 +427,72 @@ templ TranscriptSync(sourceID string, title string, transcript *asr.Result, disp
 				intervalSelect.value = savedInterval;
 			}
 
-			// === Segment Selection for Re-transcription ===
+			// Source ID (used for API calls)
 			const sourceID = audio.dataset.sourceId;
+
+			// === JSON Modal ===
+			const jsonModal = document.getElementById('json-modal');
+			const jsonModalTitle = document.getElementById('json-modal-title');
+			const jsonModalContent = document.getElementById('json-modal-content');
+			const jsonModalClose = document.getElementById('json-modal-close');
+			const jsonBtns = document.querySelectorAll('.json-btn');
+
+			let transcriptData = null;
+
+			// Fetch transcript data once
+			async function fetchTranscriptData() {
+				if (transcriptData) return transcriptData;
+				const response = await fetch(`/api/audio/${sourceID}/transcript`);
+				if (response.ok) {
+					transcriptData = await response.json();
+				}
+				return transcriptData;
+			}
+
+			// Show segment JSON
+			jsonBtns.forEach(btn => {
+				btn.addEventListener('click', async (e) => {
+					e.stopPropagation();
+					const segIdx = parseInt(btn.dataset.segIdx);
+
+					const data = await fetchTranscriptData();
+					if (!data || !data.segments || segIdx >= data.segments.length) {
+						jsonModalContent.textContent = 'セグメントデータが見つかりません';
+						jsonModalTitle.textContent = `Segment ${segIdx + 1}`;
+						jsonModal.classList.remove('hidden');
+						return;
+					}
+
+					const segment = data.segments[segIdx];
+
+					// Find tokens within this segment's time range
+					const segmentTokens = (data.tokens || []).filter(t =>
+						t.start_time >= segment.start_time && t.start_time < segment.end_time
+					);
+
+					const displayData = {
+						segment: segment,
+						tokens: segmentTokens,
+						token_count: segmentTokens.length
+					};
+
+					jsonModalTitle.textContent = `Segment ${segIdx + 1} (${segment.start_time.toFixed(2)}s - ${segment.end_time.toFixed(2)}s)`;
+					jsonModalContent.textContent = JSON.stringify(displayData, null, 2);
+					jsonModal.classList.remove('hidden');
+				});
+			});
+
+			// Close modal
+			jsonModalClose.addEventListener('click', () => {
+				jsonModal.classList.add('hidden');
+			});
+			jsonModal.addEventListener('click', (e) => {
+				if (e.target === jsonModal) {
+					jsonModal.classList.add('hidden');
+				}
+			});
+
+			// === Segment Selection for Re-transcription ===
 			const asrSegments = document.querySelectorAll('.asr-segment');
 			const selectionBar = document.getElementById('selection-bar');
 			const selectionInfo = document.getElementById('selection-info');
