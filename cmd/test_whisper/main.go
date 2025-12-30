@@ -2,12 +2,21 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"zbor/internal/asr"
 )
 
 func main() {
 	modelDir := "models/sherpa-onnx-whisper-turbo"
 	testAudio := "internal/asr/testdata/mezurashii.wav"
+
+	// Allow model dir override via command line
+	if len(os.Args) > 1 {
+		modelDir = os.Args[1]
+	}
+	if len(os.Args) > 2 {
+		testAudio = os.Args[2]
+	}
 
 	config := asr.DefaultWhisperConfig(modelDir)
 

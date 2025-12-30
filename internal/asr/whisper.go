@@ -47,19 +47,28 @@ func NewWhisperRecognizer(config *WhisperConfig) (*WhisperRecognizer, error) {
 	encoderCandidates := []string{
 		"encoder.int8.onnx",
 		"encoder.onnx",
+		"large-v3-encoder.int8.onnx",
+		"large-v3-encoder.onnx",
 		"turbo-encoder.int8.onnx",
 		"turbo-encoder.onnx",
 	}
 	decoderCandidates := []string{
 		"decoder.int8.onnx",
 		"decoder.onnx",
+		"large-v3-decoder.int8.onnx",
+		"large-v3-decoder.onnx",
 		"turbo-decoder.int8.onnx",
 		"turbo-decoder.onnx",
 	}
 
+	tokensCandidates := []string{
+		"tokens.txt",
+		"large-v3-tokens.txt",
+	}
+
 	encoderPath := findModelFile(config.ModelDir, encoderCandidates)
 	decoderPath := findModelFile(config.ModelDir, decoderCandidates)
-	tokensPath := config.ModelDir + "/tokens.txt"
+	tokensPath := findModelFile(config.ModelDir, tokensCandidates)
 
 	if encoderPath == "" {
 		return nil, fmt.Errorf("encoder model not found in %s", config.ModelDir)
@@ -67,8 +76,8 @@ func NewWhisperRecognizer(config *WhisperConfig) (*WhisperRecognizer, error) {
 	if decoderPath == "" {
 		return nil, fmt.Errorf("decoder model not found in %s", config.ModelDir)
 	}
-	if _, err := os.Stat(tokensPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("tokens file not found: %s", tokensPath)
+	if tokensPath == "" {
+		return nil, fmt.Errorf("tokens file not found in %s", config.ModelDir)
 	}
 
 	sherpaConfig := sherpa.OfflineRecognizerConfig{
