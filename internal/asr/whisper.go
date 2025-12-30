@@ -49,6 +49,8 @@ func NewWhisperRecognizer(config *WhisperConfig) (*WhisperRecognizer, error) {
 		"encoder.onnx",
 		"large-v3-encoder.int8.onnx",
 		"large-v3-encoder.onnx",
+		"large-v2-encoder.int8.onnx",
+		"large-v2-encoder.onnx",
 		"turbo-encoder.int8.onnx",
 		"turbo-encoder.onnx",
 	}
@@ -57,6 +59,8 @@ func NewWhisperRecognizer(config *WhisperConfig) (*WhisperRecognizer, error) {
 		"decoder.onnx",
 		"large-v3-decoder.int8.onnx",
 		"large-v3-decoder.onnx",
+		"large-v2-decoder.int8.onnx",
+		"large-v2-decoder.onnx",
 		"turbo-decoder.int8.onnx",
 		"turbo-decoder.onnx",
 	}
@@ -64,6 +68,7 @@ func NewWhisperRecognizer(config *WhisperConfig) (*WhisperRecognizer, error) {
 	tokensCandidates := []string{
 		"tokens.txt",
 		"large-v3-tokens.txt",
+		"large-v2-tokens.txt",
 	}
 
 	encoderPath := findModelFile(config.ModelDir, encoderCandidates)
