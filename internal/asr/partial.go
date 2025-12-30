@@ -147,7 +147,7 @@ func MergeTokens(original []Token, replacement []Token, startTime, endTime float
 }
 
 // MergeSegments replaces segments in the specified index range with new segment info
-// Preserves the original segment time boundaries to maintain SenseVoice's segmentation
+// Preserves the original segment time boundaries and count to maintain SenseVoice's segmentation
 func MergeSegments(original []Segment, startIdx, endIdx int, newTokens []Token) []Segment {
 	var result []Segment
 
@@ -156,23 +156,35 @@ func MergeSegments(original []Segment, startIdx, endIdx int, newTokens []Token) 
 		result = append(result, original[i])
 	}
 
-	// Create a segment for the new tokens, preserving original boundaries
-	if len(newTokens) > 0 && startIdx < len(original) {
-		// Get original time boundaries from the selected segment range
-		originalStartTime := original[startIdx].StartTime
-		originalEndTime := original[endIdx].EndTime
+	// Distribute new tokens to original segments based on time overlap
+	for i := startIdx; i <= endIdx && i < len(original); i++ {
+		seg := original[i]
 
-		// Build text from new tokens
-		var text string
+		// Find tokens that fall within this segment's time range
+		var segText string
 		for _, token := range newTokens {
-			text += token.Text
+			tokenStart := float64(token.StartTime)
+			// Token belongs to this segment if its start time is within the segment
+			if tokenStart >= seg.StartTime && tokenStart < seg.EndTime {
+				segText += token.Text
+			}
+		}
+
+		// Handle edge case: last segment should include tokens at exactly EndTime
+		if i == endIdx {
+			for _, token := range newTokens {
+				tokenStart := float64(token.StartTime)
+				if tokenStart >= seg.EndTime && tokenStart <= seg.EndTime+0.01 {
+					segText += token.Text
+				}
+			}
 		}
 
 		// Create new segment with original boundaries but new text
 		result = append(result, Segment{
-			Text:      text,
-			StartTime: originalStartTime,
-			EndTime:   originalEndTime,
+			Text:      segText,
+			StartTime: seg.StartTime,
+			EndTime:   seg.EndTime,
 		})
 	}
 
@@ -191,4 +203,136 @@ func RebuildTextFromTokens(tokens []Token) string {
 		text += token.Text
 	}
 	return text
+}
+
+// MergeSegmentsByRatio distributes tokens to segments based on segment duration ratio
+// This is useful for Whisper which returns uniformly distributed timestamps that don't
+// align with segment boundaries (especially when there are gaps between segments)
+func MergeSegmentsByRatio(original []Segment, startIdx, endIdx int, newTokens []Token) []Segment {
+	var result []Segment
+
+	// Keep segments before the replacement range
+	for i := 0; i < startIdx && i < len(original); i++ {
+		result = append(result, original[i])
+	}
+
+	// Calculate total duration of target segments (excluding gaps)
+	var totalDuration float64
+	for i := startIdx; i <= endIdx && i < len(original); i++ {
+		seg := original[i]
+		duration := seg.EndTime - seg.StartTime
+		if duration > 0 {
+			totalDuration += duration
+		}
+	}
+
+	// Distribute tokens proportionally to segment duration
+	tokenIndex := 0
+	for i := startIdx; i <= endIdx && i < len(original); i++ {
+		seg := original[i]
+		duration := seg.EndTime - seg.StartTime
+
+		var segText string
+		var segTokens []Token
+
+		if totalDuration > 0 && duration > 0 {
+			// Calculate number of tokens for this segment based on duration ratio
+			ratio := duration / totalDuration
+			tokenCount := int(float64(len(newTokens)) * ratio)
+
+			// Last segment gets all remaining tokens
+			if i == endIdx {
+				tokenCount = len(newTokens) - tokenIndex
+			}
+
+			// Assign tokens and adjust their timestamps to fit within segment
+			for j := 0; j < tokenCount && tokenIndex < len(newTokens); j++ {
+				token := newTokens[tokenIndex]
+				segText += token.Text
+
+				// Recalculate timestamp to fit within segment
+				tokenRatio := float64(j) / float64(max(tokenCount, 1))
+				adjustedToken := Token{
+					Text:      token.Text,
+					StartTime: float32(seg.StartTime + duration*tokenRatio),
+					Duration:  float32(duration / float64(max(tokenCount, 1))),
+				}
+				segTokens = append(segTokens, adjustedToken)
+				tokenIndex++
+			}
+		}
+
+		result = append(result, Segment{
+			Text:      segText,
+			StartTime: seg.StartTime,
+			EndTime:   seg.EndTime,
+		})
+	}
+
+	// Keep segments after the replacement range
+	for i := endIdx + 1; i < len(original); i++ {
+		result = append(result, original[i])
+	}
+
+	return result
+}
+
+// MergeTokensBySegmentRatio redistributes tokens with adjusted timestamps based on segment boundaries
+// Returns tokens with timestamps recalculated to fit within segment time ranges
+func MergeTokensBySegmentRatio(original []Token, newTokens []Token, segments []Segment, startIdx, endIdx int, startTime, endTime float64) []Token {
+	var result []Token
+
+	// Add tokens before the replacement range
+	for _, token := range original {
+		if float64(token.StartTime) < startTime {
+			result = append(result, token)
+		}
+	}
+
+	// Calculate total duration of target segments (excluding gaps)
+	var totalDuration float64
+	for i := startIdx; i <= endIdx && i < len(segments); i++ {
+		seg := segments[i]
+		duration := seg.EndTime - seg.StartTime
+		if duration > 0 {
+			totalDuration += duration
+		}
+	}
+
+	// Distribute and adjust tokens
+	tokenIndex := 0
+	for i := startIdx; i <= endIdx && i < len(segments); i++ {
+		seg := segments[i]
+		duration := seg.EndTime - seg.StartTime
+
+		if totalDuration > 0 && duration > 0 {
+			ratio := duration / totalDuration
+			tokenCount := int(float64(len(newTokens)) * ratio)
+
+			if i == endIdx {
+				tokenCount = len(newTokens) - tokenIndex
+			}
+
+			for j := 0; j < tokenCount && tokenIndex < len(newTokens); j++ {
+				token := newTokens[tokenIndex]
+				tokenRatio := float64(j) / float64(max(tokenCount, 1))
+				adjustedToken := Token{
+					Text:      token.Text,
+					StartTime: float32(seg.StartTime + duration*tokenRatio),
+					Duration:  float32(duration / float64(max(tokenCount, 1))),
+				}
+				result = append(result, adjustedToken)
+				tokenIndex++
+			}
+		}
+	}
+
+	// Add tokens after the replacement range
+	for _, token := range original {
+		if float64(token.StartTime) >= endTime {
+			result = append(result, token)
+		}
+	}
+
+	return result
 }

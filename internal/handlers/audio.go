@@ -273,7 +273,34 @@ type RetranscribeRequest struct {
 	SegmentStart int     `json:"segment_start"` // Start segment index (0-based)
 	SegmentEnd   int     `json:"segment_end"`   // End segment index (inclusive)
 	Tempo        float64 `json:"tempo"`         // Audio tempo (0.85-1.0)
-	Model        string  `json:"model"`         // "reazonspeech" (default) or "sensevoice"
+	Model        string  `json:"model"`         // "reazonspeech", "sensevoice", or "whisper"
+	Preview      bool    `json:"preview"`       // If true, return result without saving
+}
+
+// RetranscribeResponse represents the response for preview mode
+type RetranscribeResponse struct {
+	Success         bool                      `json:"success"`
+	Message         string                    `json:"message,omitempty"`
+	Error           string                    `json:"error,omitempty"`
+	OriginalSegments []RetranscribeSegmentInfo `json:"original_segments,omitempty"`
+	NewSegments     []RetranscribeSegmentInfo `json:"new_segments,omitempty"`
+	Model           string                    `json:"model,omitempty"`
+	Tempo           float64                   `json:"tempo,omitempty"`
+}
+
+// RetranscribeSegmentInfo contains segment info for display
+type RetranscribeSegmentInfo struct {
+	Index     int                      `json:"index"`
+	StartTime float64                  `json:"start_time"`
+	EndTime   float64                  `json:"end_time"`
+	Text      string                   `json:"text"`
+	Tokens    []RetranscribeTokenInfo  `json:"tokens"`
+}
+
+// RetranscribeTokenInfo contains token info for display
+type RetranscribeTokenInfo struct {
+	Text      string  `json:"text"`
+	StartTime float64 `json:"start_time"`
 }
 
 // Retranscribe handles partial re-transcription of audio segments
@@ -408,11 +435,87 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		}
 	}
 
-	// Merge tokens
-	mergedTokens := asr.MergeTokens(transcript.Tokens, partialResult.Tokens, startTime, endTime)
+	// Merge tokens and segments
+	// For Whisper, use ratio-based distribution since timestamps are uniformly distributed
+	// and don't align with segment boundaries (especially when there are gaps)
+	var mergedTokens []asr.Token
+	var mergedSegments []asr.Segment
+	if model == storage.ASRModelWhisper {
+		mergedTokens = asr.MergeTokensBySegmentRatio(transcript.Tokens, partialResult.Tokens, transcript.Segments, req.SegmentStart, req.SegmentEnd, startTime, endTime)
+		mergedSegments = asr.MergeSegmentsByRatio(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
+	} else {
+		mergedTokens = asr.MergeTokens(transcript.Tokens, partialResult.Tokens, startTime, endTime)
+		mergedSegments = asr.MergeSegments(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
+	}
 
-	// Merge segments
-	mergedSegments := asr.MergeSegments(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
+	// Build original segments info for response
+	originalSegments := make([]RetranscribeSegmentInfo, 0, req.SegmentEnd-req.SegmentStart+1)
+	for i := req.SegmentStart; i <= req.SegmentEnd && i < len(transcript.Segments); i++ {
+		seg := transcript.Segments[i]
+		// Find tokens in this segment
+		var segTokens []RetranscribeTokenInfo
+		for _, t := range transcript.Tokens {
+			if float64(t.StartTime) >= seg.StartTime && float64(t.StartTime) < seg.EndTime {
+				segTokens = append(segTokens, RetranscribeTokenInfo{
+					Text:      t.Text,
+					StartTime: float64(t.StartTime),
+				})
+			}
+		}
+		originalSegments = append(originalSegments, RetranscribeSegmentInfo{
+			Index:     i + 1, // 1-based for display
+			StartTime: seg.StartTime,
+			EndTime:   seg.EndTime,
+			Text:      seg.Text,
+			Tokens:    segTokens,
+		})
+	}
+
+	// Build new segments info for response
+	// Use mergedTokens which has adjusted timestamps (important for Whisper)
+	newSegments := make([]RetranscribeSegmentInfo, 0, req.SegmentEnd-req.SegmentStart+1)
+	for i := req.SegmentStart; i <= req.SegmentEnd && i < len(mergedSegments); i++ {
+		seg := mergedSegments[i]
+		// Find tokens in this segment from merged result (which has correct timestamps)
+		var segTokens []RetranscribeTokenInfo
+		for _, t := range mergedTokens {
+			if float64(t.StartTime) >= seg.StartTime && float64(t.StartTime) < seg.EndTime {
+				segTokens = append(segTokens, RetranscribeTokenInfo{
+					Text:      t.Text,
+					StartTime: float64(t.StartTime),
+				})
+			}
+		}
+		// Handle edge case for last segment
+		if i == req.SegmentEnd {
+			for _, t := range mergedTokens {
+				if float64(t.StartTime) >= seg.EndTime && float64(t.StartTime) <= seg.EndTime+0.01 {
+					segTokens = append(segTokens, RetranscribeTokenInfo{
+						Text:      t.Text,
+						StartTime: float64(t.StartTime),
+					})
+				}
+			}
+		}
+		newSegments = append(newSegments, RetranscribeSegmentInfo{
+			Index:     i + 1, // 1-based for display
+			StartTime: seg.StartTime,
+			EndTime:   seg.EndTime,
+			Text:      seg.Text,
+			Tokens:    segTokens,
+		})
+	}
+
+	// If preview mode, return without saving
+	if req.Preview {
+		return c.JSON(http.StatusOK, RetranscribeResponse{
+			Success:          true,
+			OriginalSegments: originalSegments,
+			NewSegments:      newSegments,
+			Model:            model,
+			Tempo:            req.Tempo,
+		})
+	}
 
 	// Rebuild text
 	mergedText := asr.RebuildTextFromTokens(mergedTokens)
@@ -433,13 +536,13 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to save transcript"})
 	}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message":        "Retranscription completed",
-		"segments_range": []int{req.SegmentStart, req.SegmentEnd},
-		"time_range":     []float64{startTime, endTime},
-		"tempo":          req.Tempo,
-		"model":          model,
-		"new_tokens":     len(partialResult.Tokens),
+	return c.JSON(http.StatusOK, RetranscribeResponse{
+		Success:          true,
+		Message:          "Retranscription completed",
+		OriginalSegments: originalSegments,
+		NewSegments:      newSegments,
+		Model:            model,
+		Tempo:            req.Tempo,
 	})
 }
 

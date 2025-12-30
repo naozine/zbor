@@ -201,9 +201,9 @@ func (r *WhisperRecognizer) TranscribePartial(filePath string, opts PartialTrans
 		return &Result{}, nil
 	}
 
-	// Whisper doesn't return timestamps, so distribute uniformly
+	// Use Whisper's tokens (word/subword level) instead of character splitting
 	text := strings.TrimSpace(result.Text)
-	tokens := distributeTimestampsUniformly(text, opts.StartTime, opts.EndTime)
+	tokens := distributeTimestampsToWhisperTokens(result.Tokens, opts.StartTime, opts.EndTime)
 
 	return &Result{
 		Text:   text,
@@ -211,22 +211,30 @@ func (r *WhisperRecognizer) TranscribePartial(filePath string, opts PartialTrans
 	}, nil
 }
 
-// distributeTimestampsUniformly creates tokens with uniformly distributed timestamps
-func distributeTimestampsUniformly(text string, startTime, endTime float64) []Token {
-	runes := []rune(text)
-	if len(runes) == 0 {
+// distributeTimestampsToWhisperTokens creates tokens with uniformly distributed timestamps
+// using Whisper's word/subword tokens instead of character-level splitting
+func distributeTimestampsToWhisperTokens(whisperTokens []string, startTime, endTime float64) []Token {
+	// Filter out empty tokens
+	var validTokens []string
+	for _, t := range whisperTokens {
+		if strings.TrimSpace(t) != "" {
+			validTokens = append(validTokens, t)
+		}
+	}
+
+	if len(validTokens) == 0 {
 		return nil
 	}
 
 	duration := endTime - startTime
-	charDuration := duration / float64(len(runes))
+	tokenDuration := duration / float64(len(validTokens))
 
-	tokens := make([]Token, len(runes))
-	for i, r := range runes {
+	tokens := make([]Token, len(validTokens))
+	for i, t := range validTokens {
 		tokens[i] = Token{
-			Text:      string(r),
-			StartTime: float32(startTime + float64(i)*charDuration),
-			Duration:  float32(charDuration),
+			Text:      t,
+			StartTime: float32(startTime + float64(i)*tokenDuration),
+			Duration:  float32(tokenDuration),
 		}
 	}
 	return tokens

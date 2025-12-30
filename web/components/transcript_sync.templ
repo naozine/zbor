@@ -239,6 +239,108 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			</div>
 		</div>
 
+		<!-- Re-transcribe Modal -->
+		<div id="retranscribe-modal" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg shadow-xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+				<!-- Header -->
+				<div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+					<h3 class="font-medium text-gray-900">再文字起こし</h3>
+					<button id="retranscribe-modal-close" class="text-gray-400 hover:text-gray-600">
+						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+				</div>
+
+				<!-- Parameters -->
+				<div class="px-4 py-3 border-b border-gray-200 bg-gray-50">
+					<div class="flex items-center space-x-6">
+						<div class="flex items-center space-x-2">
+							<span class="text-sm text-gray-600">対象:</span>
+							<span id="modal-selection-info" class="text-sm font-medium text-blue-600">-</span>
+						</div>
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Model:</label>
+							<select id="modal-model" class="text-sm border-gray-300 rounded-md">
+								<option value="reazonspeech" selected>ReazonSpeech</option>
+								<option value="sensevoice">SenseVoice</option>
+								<option value="whisper">Whisper</option>
+							</select>
+						</div>
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Tempo:</label>
+							<select id="modal-tempo" class="text-sm border-gray-300 rounded-md">
+								<option value="0.5">0.5x (超低速)</option>
+								<option value="0.6">0.6x</option>
+								<option value="0.7">0.7x</option>
+								<option value="0.75">0.75x</option>
+								<option value="0.8">0.8x</option>
+								<option value="0.85" selected>0.85x</option>
+								<option value="0.9">0.9x</option>
+								<option value="0.95">0.95x</option>
+								<option value="1.0">1.0x (通常)</option>
+							</select>
+						</div>
+						<button
+							id="modal-execute-btn"
+							class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+						>
+							実行
+						</button>
+						<div id="modal-loading" class="hidden flex items-center space-x-2 text-gray-500">
+							<svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+							</svg>
+							<span class="text-sm">処理中...</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Content: Two Panes -->
+				<div class="flex-1 overflow-hidden flex">
+					<!-- Left Pane: Original -->
+					<div class="w-1/2 border-r border-gray-200 flex flex-col">
+						<div class="px-4 py-2 bg-gray-100 border-b border-gray-200">
+							<h4 class="text-sm font-medium text-gray-700">元のテキスト</h4>
+						</div>
+						<div id="modal-original-content" class="flex-1 overflow-auto p-4 text-sm font-mono">
+							<!-- Original segments will be displayed here -->
+						</div>
+					</div>
+
+					<!-- Right Pane: Result -->
+					<div class="w-1/2 flex flex-col">
+						<div class="px-4 py-2 bg-gray-100 border-b border-gray-200">
+							<h4 class="text-sm font-medium text-gray-700">再文字起こし結果</h4>
+						</div>
+						<div id="modal-result-content" class="flex-1 overflow-auto p-4 text-sm font-mono">
+							<div class="text-gray-400 text-center py-8">
+								「実行」ボタンを押して再文字起こしを実行してください
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Footer -->
+				<div class="px-4 py-3 border-t border-gray-200 flex justify-end space-x-3">
+					<button
+						id="modal-cancel-btn"
+						class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded-md focus:outline-none"
+					>
+						キャンセル
+					</button>
+					<button
+						id="modal-apply-btn"
+						class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+						disabled
+					>
+						適用
+					</button>
+				</div>
+			</div>
+		</div>
+
 		<audio id="audio" preload="auto" data-source-id={ sourceID }>
 			<source src={ "/api/audio/" + sourceID + "/stream" } type="audio/wav"/>
 		</audio>
@@ -657,19 +759,120 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 				updateSelectionUI();
 			});
 
-			// Retranscribe button
-			const retranscribeModel = document.getElementById('retranscribe-model');
+			// === Re-transcribe Modal ===
+			const retranscribeModal = document.getElementById('retranscribe-modal');
+			const modalCloseBtn = document.getElementById('retranscribe-modal-close');
+			const modalSelectionInfo = document.getElementById('modal-selection-info');
+			const modalModel = document.getElementById('modal-model');
+			const modalTempo = document.getElementById('modal-tempo');
+			const modalExecuteBtn = document.getElementById('modal-execute-btn');
+			const modalLoading = document.getElementById('modal-loading');
+			const modalOriginalContent = document.getElementById('modal-original-content');
+			const modalResultContent = document.getElementById('modal-result-content');
+			const modalCancelBtn = document.getElementById('modal-cancel-btn');
+			const modalApplyBtn = document.getElementById('modal-apply-btn');
 
-			retranscribeBtn.addEventListener('click', async () => {
+			let currentPreviewResult = null; // Store preview result for apply
+
+			// Format time as MM:SS.mm
+			function formatTimeMs(seconds) {
+				const mins = Math.floor(seconds / 60);
+				const secs = seconds % 60;
+				return `${mins}:${secs.toFixed(2).padStart(5, '0')}`;
+			}
+
+			// Render segments to HTML
+			function renderSegments(segments, isResult = false) {
+				if (!segments || segments.length === 0) {
+					return '<div class="text-gray-400 text-center py-4">セグメントがありません</div>';
+				}
+
+				return segments.map(seg => {
+					const bgClass = isResult ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200';
+					const timeClass = isResult ? 'text-green-600' : 'text-gray-500';
+					return `
+						<div class="mb-3 p-2 rounded border ${bgClass}">
+							<div class="flex justify-between items-start mb-1">
+								<span class="text-xs ${timeClass}">${formatTimeMs(seg.start_time)} - ${formatTimeMs(seg.end_time)}</span>
+								<span class="text-xs text-gray-400">seg${seg.index}</span>
+							</div>
+							<div class="text-sm">${seg.text || '<span class="text-gray-400">(空)</span>'}</div>
+						</div>
+					`;
+				}).join('');
+			}
+
+			// Open modal and show original segments
+			async function openRetranscribeModal() {
+				if (selectedSegments.size === 0) return;
+
+				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+				const minIdx = sortedIndices[0];
+				const maxIdx = sortedIndices[sortedIndices.length - 1];
+
+				// Find time range
+				let startTime = Infinity, endTime = 0;
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (idx >= minIdx && idx <= maxIdx) {
+						const start = parseFloat(seg.dataset.start);
+						const end = parseFloat(seg.dataset.end);
+						if (start < startTime) startTime = start;
+						if (end > endTime) endTime = end;
+					}
+				});
+
+				const duration = endTime - startTime;
+				modalSelectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+
+				// Copy values from selection bar
+				modalModel.value = document.getElementById('retranscribe-model').value;
+				modalTempo.value = retranscribeTempo.value;
+
+				// Fetch original segments
+				const data = await fetchTranscriptData();
+				if (data && data.segments) {
+					const originalSegments = [];
+					for (let i = minIdx; i <= maxIdx && i < data.segments.length; i++) {
+						originalSegments.push({
+							index: i + 1, // 1-based for display (consistent with API)
+							start_time: data.segments[i].start_time,
+							end_time: data.segments[i].end_time,
+							text: data.segments[i].text
+						});
+					}
+					modalOriginalContent.innerHTML = renderSegments(originalSegments, false);
+				}
+
+				// Reset result pane
+				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">「実行」ボタンを押して再文字起こしを実行してください</div>';
+				modalApplyBtn.disabled = true;
+				currentPreviewResult = null;
+
+				// Show modal
+				retranscribeModal.classList.remove('hidden');
+			}
+
+			// Close modal
+			function closeRetranscribeModal() {
+				retranscribeModal.classList.add('hidden');
+				currentPreviewResult = null;
+			}
+
+			// Execute preview (without saving)
+			async function executePreview() {
 				if (selectedSegments.size === 0) return;
 
 				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
 				const segmentStart = sortedIndices[0];
 				const segmentEnd = sortedIndices[sortedIndices.length - 1];
-				const tempo = parseFloat(retranscribeTempo.value);
-				const model = retranscribeModel.value;
+				const tempo = parseFloat(modalTempo.value);
+				const model = modalModel.value;
 
-				processingOverlay.classList.remove('hidden');
+				// Show loading
+				modalExecuteBtn.classList.add('hidden');
+				modalLoading.classList.remove('hidden');
+				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">処理中...</div>';
 
 				try {
 					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
@@ -679,22 +882,90 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 							segment_start: segmentStart,
 							segment_end: segmentEnd,
 							tempo: tempo,
-							model: model
+							model: model,
+							preview: true
 						})
 					});
 
 					const result = await response.json();
 
-					if (response.ok) {
+					if (response.ok && result.success) {
+						currentPreviewResult = {
+							segment_start: segmentStart,
+							segment_end: segmentEnd,
+							tempo: tempo,
+							model: model
+						};
+						modalResultContent.innerHTML = renderSegments(result.new_segments, true);
+						modalApplyBtn.disabled = false;
+					} else {
+						modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${result.error || '再文字起こしに失敗しました'}</div>`;
+						modalApplyBtn.disabled = true;
+					}
+				} catch (err) {
+					modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${err.message}</div>`;
+					modalApplyBtn.disabled = true;
+				} finally {
+					modalExecuteBtn.classList.remove('hidden');
+					modalLoading.classList.add('hidden');
+				}
+			}
+
+			// Apply changes (save)
+			async function applyChanges() {
+				if (!currentPreviewResult) return;
+
+				modalApplyBtn.disabled = true;
+				modalApplyBtn.textContent = '適用中...';
+
+				try {
+					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							segment_start: currentPreviewResult.segment_start,
+							segment_end: currentPreviewResult.segment_end,
+							tempo: currentPreviewResult.tempo,
+							model: currentPreviewResult.model,
+							preview: false
+						})
+					});
+
+					const result = await response.json();
+
+					if (response.ok && result.success) {
 						// Reload page to show updated transcript
 						window.location.reload();
 					} else {
-						alert('エラー: ' + (result.error || '再文字起こしに失敗しました'));
+						alert('エラー: ' + (result.error || '保存に失敗しました'));
+						modalApplyBtn.disabled = false;
+						modalApplyBtn.textContent = '適用';
 					}
 				} catch (err) {
 					alert('エラー: ' + err.message);
-				} finally {
-					processingOverlay.classList.add('hidden');
+					modalApplyBtn.disabled = false;
+					modalApplyBtn.textContent = '適用';
+				}
+			}
+
+			// Event listeners for modal
+			retranscribeBtn.addEventListener('click', openRetranscribeModal);
+			modalCloseBtn.addEventListener('click', closeRetranscribeModal);
+			modalCancelBtn.addEventListener('click', closeRetranscribeModal);
+			modalExecuteBtn.addEventListener('click', executePreview);
+			modalApplyBtn.addEventListener('click', applyChanges);
+
+			// Close modal on backdrop click
+			retranscribeModal.addEventListener('click', (e) => {
+				if (e.target === retranscribeModal) {
+					closeRetranscribeModal();
+				}
+			});
+
+			// Close modal on Escape key
+			document.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape' && !retranscribeModal.classList.contains('hidden')) {
+					closeRetranscribeModal();
 				}
 			});
 		</script>
