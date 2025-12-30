@@ -553,8 +553,59 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 				selectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
 			}
 
-			// Click on ASR segment to toggle selection
+			// === ASR Segment Hover Highlighting ===
+			// Highlight all instances of the same segment and corresponding tokens on hover
+			function highlightSegment(segIdx, highlight) {
+				// Find all ASR segment elements with the same index
+				const allAsrSegs = document.querySelectorAll(`.asr-segment[data-seg-idx="${segIdx}"]`);
+
+				// Get time range from matching elements
+				let startTime = Infinity, endTime = 0;
+				allAsrSegs.forEach(seg => {
+					const start = parseFloat(seg.dataset.start);
+					const end = parseFloat(seg.dataset.end);
+					if (start < startTime) startTime = start;
+					if (end > endTime) endTime = end;
+				});
+
+				// Highlight/unhighlight ASR segment labels
+				allAsrSegs.forEach(seg => {
+					if (highlight) {
+						seg.classList.add('bg-purple-100', 'text-purple-700');
+						seg.classList.remove('text-gray-400');
+					} else {
+						seg.classList.remove('bg-purple-100', 'text-purple-700');
+						// Only restore gray if not selected
+						if (!selectedSegments.has(parseInt(seg.dataset.segIdx))) {
+							seg.classList.add('text-gray-400');
+						}
+					}
+				});
+
+				// Highlight/unhighlight tokens within the time range
+				tokens.forEach(token => {
+					const tokenStart = parseFloat(token.dataset.start);
+					if (tokenStart >= startTime && tokenStart < endTime) {
+						if (highlight) {
+							token.classList.add('bg-purple-200');
+						} else {
+							token.classList.remove('bg-purple-200');
+						}
+					}
+				});
+			}
+
+			// Click on ASR segment to toggle selection, hover to highlight
 			asrSegments.forEach(seg => {
+				// Hover events
+				seg.addEventListener('mouseenter', () => {
+					highlightSegment(seg.dataset.segIdx, true);
+				});
+				seg.addEventListener('mouseleave', () => {
+					highlightSegment(seg.dataset.segIdx, false);
+				});
+
+				// Click event
 				seg.addEventListener('click', (e) => {
 					e.stopPropagation();
 					const idx = parseInt(seg.dataset.segIdx);
