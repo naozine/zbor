@@ -585,7 +585,7 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 				// Highlight/unhighlight tokens within the time range
 				tokens.forEach(token => {
 					const tokenStart = parseFloat(token.dataset.start);
-					if (tokenStart >= startTime && tokenStart < endTime) {
+					if (tokenStart >= startTime && tokenStart <= endTime) {
 						if (highlight) {
 							token.classList.add('bg-purple-200');
 						} else {
