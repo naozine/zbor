@@ -123,6 +123,115 @@ func (r *WhisperRecognizer) Close() {
 	}
 }
 
+// TranscribePartial transcribes a specific time range of an audio file
+// Since Whisper doesn't return timestamps, we distribute them uniformly
+func (r *WhisperRecognizer) TranscribePartial(filePath string, opts PartialTranscribeOptions) (*Result, error) {
+	if opts.ChunkSec <= 0 {
+		opts.ChunkSec = 30 // Whisper supports up to 30 seconds natively
+	}
+
+	duration := opts.EndTime - opts.StartTime
+	if duration <= 0 {
+		return nil, fmt.Errorf("invalid time range: %.2f - %.2f", opts.StartTime, opts.EndTime)
+	}
+
+	// Build ffmpeg command to extract and process the time range
+	args := []string{
+		"-ss", fmt.Sprintf("%.3f", opts.StartTime),
+		"-i", filePath,
+		"-t", fmt.Sprintf("%.3f", duration),
+	}
+
+	// Add tempo filter if not 1.0
+	if opts.Tempo > 0 && opts.Tempo != 1.0 {
+		args = append(args, "-af", fmt.Sprintf("atempo=%.2f", opts.Tempo))
+	}
+
+	args = append(args,
+		"-f", "s16le",
+		"-acodec", "pcm_s16le",
+		"-ar", fmt.Sprintf("%d", r.config.SampleRate),
+		"-ac", "1",
+		"-loglevel", "error",
+		"pipe:1",
+	)
+
+	cmd := exec.Command("ffmpeg", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// Read all audio data
+	reader := bufio.NewReader(stdout)
+	var allSamples []float32
+
+	chunkBytes := r.config.SampleRate * opts.ChunkSec * 2
+	for {
+		buffer := make([]byte, chunkBytes)
+		n, err := io.ReadFull(reader, buffer)
+		if n == 0 {
+			break
+		}
+		samples := bytesToFloat32SV(buffer[:n])
+		allSamples = append(allSamples, samples...)
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+	}
+	cmd.Wait()
+
+	if len(allSamples) == 0 {
+		return &Result{}, nil
+	}
+
+	// Transcribe all samples at once (Whisper handles up to 30s well)
+	stream := sherpa.NewOfflineStream(r.recognizer)
+	defer sherpa.DeleteOfflineStream(stream)
+
+	stream.AcceptWaveform(r.config.SampleRate, allSamples)
+	r.recognizer.Decode(stream)
+
+	result := stream.GetResult()
+	if result == nil || result.Text == "" {
+		return &Result{}, nil
+	}
+
+	// Whisper doesn't return timestamps, so distribute uniformly
+	text := strings.TrimSpace(result.Text)
+	tokens := distributeTimestampsUniformly(text, opts.StartTime, opts.EndTime)
+
+	return &Result{
+		Text:   text,
+		Tokens: tokens,
+	}, nil
+}
+
+// distributeTimestampsUniformly creates tokens with uniformly distributed timestamps
+func distributeTimestampsUniformly(text string, startTime, endTime float64) []Token {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+
+	duration := endTime - startTime
+	charDuration := duration / float64(len(runes))
+
+	tokens := make([]Token, len(runes))
+	for i, r := range runes {
+		tokens[i] = Token{
+			Text:      string(r),
+			StartTime: float32(startTime + float64(i)*charDuration),
+			Duration:  float32(charDuration),
+		}
+	}
+	return tokens
+}
+
 // TranscribeFile transcribes an audio file using Whisper
 func (r *WhisperRecognizer) TranscribeFile(inputPath string, chunkSec int, onProgress ProgressCallback) (*Result, error) {
 	if chunkSec <= 0 {

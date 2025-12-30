@@ -183,6 +183,7 @@ const (
 	ASRModelReazonSpeech   = "reazonspeech"
 	ASRModelSenseVoice     = "sensevoice"
 	ASRModelSenseVoiceBeam = "sensevoice:beam" // SenseVoice with beam search
+	ASRModelWhisper        = "whisper"         // Whisper (no timestamps)
 )
 
 // ジョブステータス

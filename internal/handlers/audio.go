@@ -385,6 +385,17 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
 		}
+	case storage.ASRModelWhisper:
+		wConfig := asr.DefaultWhisperConfig("models/sherpa-onnx-whisper-turbo")
+		wRecognizer, err := asr.NewWhisperRecognizer(wConfig)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create whisper recognizer: " + err.Error()})
+		}
+		defer wRecognizer.Close()
+		partialResult, err = wRecognizer.TranscribePartial(audioPath, opts)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
+		}
 	default: // reazonspeech
 		recognizer, err := asr.NewRecognizer(h.asrConfig)
 		if err != nil {
