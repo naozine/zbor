@@ -46,7 +46,7 @@ Thumbs.db
 
 #
 output/
-models/
+/models/
 
 # Test audio files (not public)
 **/testdata/*.wav
