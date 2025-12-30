@@ -412,7 +412,7 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
 		}
-	case storage.ASRModelWhisper:
+	case storage.ASRModelWhisper, storage.ASRModelWhisperAlign:
 		wConfig := asr.DefaultWhisperConfig("models/sherpa-onnx-whisper-turbo")
 		wRecognizer, err := asr.NewWhisperRecognizer(wConfig)
 		if err != nil {
@@ -435,15 +435,42 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		}
 	}
 
-	// Merge tokens and segments
-	// For Whisper, use ratio-based distribution since timestamps are uniformly distributed
-	// and don't align with segment boundaries (especially when there are gaps)
+	// Merge tokens and segments based on model type
 	var mergedTokens []asr.Token
 	var mergedSegments []asr.Segment
-	if model == storage.ASRModelWhisper {
+
+	switch model {
+	case storage.ASRModelWhisperAlign:
+		// Use LCS-based alignment to preserve original timestamps where characters match
+		alignedTokens, alignedSegments := asr.AlignTokensForSegments(
+			transcript.Tokens,
+			partialResult.Text,
+			transcript.Segments,
+			req.SegmentStart,
+			req.SegmentEnd,
+		)
+
+		// Merge aligned tokens with original tokens (outside the range)
+		mergedTokens = asr.MergeTokens(transcript.Tokens, alignedTokens, startTime, endTime)
+
+		// Merge aligned segments with original segments
+		mergedSegments = make([]asr.Segment, 0, len(transcript.Segments))
+		for i := 0; i < req.SegmentStart && i < len(transcript.Segments); i++ {
+			mergedSegments = append(mergedSegments, transcript.Segments[i])
+		}
+		mergedSegments = append(mergedSegments, alignedSegments...)
+		for i := req.SegmentEnd + 1; i < len(transcript.Segments); i++ {
+			mergedSegments = append(mergedSegments, transcript.Segments[i])
+		}
+
+	case storage.ASRModelWhisper:
+		// Use ratio-based distribution since timestamps are uniformly distributed
+		// and don't align with segment boundaries (especially when there are gaps)
 		mergedTokens = asr.MergeTokensBySegmentRatio(transcript.Tokens, partialResult.Tokens, transcript.Segments, req.SegmentStart, req.SegmentEnd, startTime, endTime)
 		mergedSegments = asr.MergeSegmentsByRatio(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
-	} else {
+
+	default:
+		// ReazonSpeech, SenseVoice: use timestamp-based merge
 		mergedTokens = asr.MergeTokens(transcript.Tokens, partialResult.Tokens, startTime, endTime)
 		mergedSegments = asr.MergeSegments(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
 	}

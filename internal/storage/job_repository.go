@@ -184,6 +184,7 @@ const (
 	ASRModelSenseVoice     = "sensevoice"
 	ASRModelSenseVoiceBeam = "sensevoice:beam" // SenseVoice with beam search
 	ASRModelWhisper        = "whisper"         // Whisper (no timestamps)
+	ASRModelWhisperAlign   = "whisper:align"   // Whisper with LCS-based timestamp alignment
 )
 
 // ジョブステータス
