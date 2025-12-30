@@ -299,6 +299,29 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 					</div>
 				</div>
 
+				<!-- Whisper Align Info (hidden by default, shown for whisper:align) -->
+				<div id="modal-align-info" class="hidden border-b border-gray-200">
+					<!-- Whisper Raw Output -->
+					<div class="px-4 py-2 bg-blue-50 border-b border-blue-100">
+						<div class="flex items-center space-x-2">
+							<span class="text-xs font-medium text-blue-700">Whisper出力:</span>
+							<span id="modal-whisper-raw" class="text-xs text-blue-900 font-mono"></span>
+						</div>
+					</div>
+					<!-- Alignment Diff -->
+					<div class="px-4 py-2 bg-gray-50">
+						<div class="flex items-start space-x-2">
+							<span class="text-xs font-medium text-gray-700 whitespace-nowrap">マッチング:</span>
+							<div id="modal-alignment-diff" class="text-xs font-mono flex flex-wrap"></div>
+						</div>
+						<div class="mt-1 flex items-center space-x-3 text-xs text-gray-500">
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-gray-200 rounded mr-1"></span>共通</span>
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-green-200 rounded mr-1"></span>追加</span>
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-red-200 rounded mr-1"></span>削除</span>
+						</div>
+					</div>
+				</div>
+
 				<!-- Content: Two Panes -->
 				<div class="flex-1 overflow-hidden flex">
 					<!-- Left Pane: Original -->
@@ -773,6 +796,10 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			const modalResultContent = document.getElementById('modal-result-content');
 			const modalCancelBtn = document.getElementById('modal-cancel-btn');
 			const modalApplyBtn = document.getElementById('modal-apply-btn');
+			// Whisper Align specific elements
+			const modalAlignInfo = document.getElementById('modal-align-info');
+			const modalWhisperRaw = document.getElementById('modal-whisper-raw');
+			const modalAlignmentDiff = document.getElementById('modal-alignment-diff');
 
 			let currentPreviewResult = null; // Store preview result for apply
 
@@ -802,6 +829,47 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 						</div>
 					`;
 				}).join('');
+			}
+
+			// Render alignment diff to HTML
+			function renderAlignmentDiff(diff) {
+				if (!diff || diff.length === 0) return '';
+
+				return diff.map(item => {
+					let className = '';
+					let text = item.char;
+
+					switch (item.op) {
+						case 'match':
+							className = 'bg-gray-200 text-gray-800';
+							break;
+						case 'insert':
+							className = 'bg-green-200 text-green-800';
+							break;
+						case 'delete':
+							className = 'bg-red-200 text-red-800 line-through';
+							break;
+					}
+
+					// Handle special characters for display
+					if (text === ' ') text = '\u00A0'; // Non-breaking space
+					if (text === '\n') text = '↵';
+
+					return `<span class="${className} px-0.5">${text}</span>`;
+				}).join('');
+			}
+
+			// Show/hide Whisper Align info section
+			function updateAlignInfoVisibility(show, result = null) {
+				if (show && result) {
+					modalAlignInfo.classList.remove('hidden');
+					modalWhisperRaw.textContent = result.whisper_raw_text || '';
+					modalAlignmentDiff.innerHTML = renderAlignmentDiff(result.alignment_diff);
+				} else {
+					modalAlignInfo.classList.add('hidden');
+					modalWhisperRaw.textContent = '';
+					modalAlignmentDiff.innerHTML = '';
+				}
 			}
 
 			// Open modal and show original segments
@@ -846,10 +914,11 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 					modalOriginalContent.innerHTML = renderSegments(originalSegments, false);
 				}
 
-				// Reset result pane
+				// Reset result pane and align info
 				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">「実行」ボタンを押して再文字起こしを実行してください</div>';
 				modalApplyBtn.disabled = true;
 				currentPreviewResult = null;
+				updateAlignInfoVisibility(false);
 
 				// Show modal
 				retranscribeModal.classList.remove('hidden');
@@ -859,6 +928,7 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			function closeRetranscribeModal() {
 				retranscribeModal.classList.add('hidden');
 				currentPreviewResult = null;
+				updateAlignInfoVisibility(false);
 			}
 
 			// Execute preview (without saving)
@@ -900,13 +970,22 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 						};
 						modalResultContent.innerHTML = renderSegments(result.new_segments, true);
 						modalApplyBtn.disabled = false;
+
+						// Show Whisper Align info if available
+						if (model === 'whisper:align' && result.whisper_raw_text) {
+							updateAlignInfoVisibility(true, result);
+						} else {
+							updateAlignInfoVisibility(false);
+						}
 					} else {
 						modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${result.error || '再文字起こしに失敗しました'}</div>`;
 						modalApplyBtn.disabled = true;
+						updateAlignInfoVisibility(false);
 					}
 				} catch (err) {
 					modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${err.message}</div>`;
 					modalApplyBtn.disabled = true;
+					updateAlignInfoVisibility(false);
 				} finally {
 					modalExecuteBtn.classList.remove('hidden');
 					modalLoading.classList.add('hidden');

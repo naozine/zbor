@@ -279,13 +279,23 @@ type RetranscribeRequest struct {
 
 // RetranscribeResponse represents the response for preview mode
 type RetranscribeResponse struct {
-	Success         bool                      `json:"success"`
-	Message         string                    `json:"message,omitempty"`
-	Error           string                    `json:"error,omitempty"`
+	Success          bool                      `json:"success"`
+	Message          string                    `json:"message,omitempty"`
+	Error            string                    `json:"error,omitempty"`
 	OriginalSegments []RetranscribeSegmentInfo `json:"original_segments,omitempty"`
-	NewSegments     []RetranscribeSegmentInfo `json:"new_segments,omitempty"`
-	Model           string                    `json:"model,omitempty"`
-	Tempo           float64                   `json:"tempo,omitempty"`
+	NewSegments      []RetranscribeSegmentInfo `json:"new_segments,omitempty"`
+	Model            string                    `json:"model,omitempty"`
+	Tempo            float64                   `json:"tempo,omitempty"`
+	// Whisper Align specific fields
+	WhisperRawText  string                    `json:"whisper_raw_text,omitempty"`
+	AlignmentDiff   []AlignmentDiffItem       `json:"alignment_diff,omitempty"`
+	OriginalText    string                    `json:"original_text,omitempty"`
+}
+
+// AlignmentDiffItem represents a single character in the alignment diff
+type AlignmentDiffItem struct {
+	Char string `json:"char"` // The character
+	Op   string `json:"op"`   // "match", "insert", or "delete"
 }
 
 // RetranscribeSegmentInfo contains segment info for display
@@ -438,11 +448,12 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	// Merge tokens and segments based on model type
 	var mergedTokens []asr.Token
 	var mergedSegments []asr.Segment
+	var alignResult *asr.AlignResult // For Whisper Align diff info
 
 	switch model {
 	case storage.ASRModelWhisperAlign:
 		// Use LCS-based alignment to preserve original timestamps where characters match
-		alignedTokens, alignedSegments := asr.AlignTokensForSegments(
+		alignResult = asr.AlignTokensForSegmentsWithDiff(
 			transcript.Tokens,
 			partialResult.Text,
 			transcript.Segments,
@@ -451,14 +462,14 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		)
 
 		// Merge aligned tokens with original tokens (outside the range)
-		mergedTokens = asr.MergeTokens(transcript.Tokens, alignedTokens, startTime, endTime)
+		mergedTokens = asr.MergeTokens(transcript.Tokens, alignResult.Tokens, startTime, endTime)
 
 		// Merge aligned segments with original segments
 		mergedSegments = make([]asr.Segment, 0, len(transcript.Segments))
 		for i := 0; i < req.SegmentStart && i < len(transcript.Segments); i++ {
 			mergedSegments = append(mergedSegments, transcript.Segments[i])
 		}
-		mergedSegments = append(mergedSegments, alignedSegments...)
+		mergedSegments = append(mergedSegments, alignResult.Segments...)
 		for i := req.SegmentEnd + 1; i < len(transcript.Segments); i++ {
 			mergedSegments = append(mergedSegments, transcript.Segments[i])
 		}
@@ -535,13 +546,28 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 
 	// If preview mode, return without saving
 	if req.Preview {
-		return c.JSON(http.StatusOK, RetranscribeResponse{
+		response := RetranscribeResponse{
 			Success:          true,
 			OriginalSegments: originalSegments,
 			NewSegments:      newSegments,
 			Model:            model,
 			Tempo:            req.Tempo,
-		})
+		}
+
+		// Add Whisper Align specific fields if available
+		if alignResult != nil {
+			response.WhisperRawText = alignResult.RawText
+			response.OriginalText = alignResult.OriginalText
+			// Convert asr.AlignmentDiffItem to handlers.AlignmentDiffItem
+			for _, d := range alignResult.Diff {
+				response.AlignmentDiff = append(response.AlignmentDiff, AlignmentDiffItem{
+					Char: d.Char,
+					Op:   d.Op,
+				})
+			}
+		}
+
+		return c.JSON(http.StatusOK, response)
 	}
 
 	// Rebuild text

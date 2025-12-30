@@ -1,5 +1,20 @@
 package asr
 
+// AlignmentDiffItem represents a single character in the alignment diff
+type AlignmentDiffItem struct {
+	Char string `json:"char"` // The character
+	Op   string `json:"op"`   // "match", "insert", or "delete"
+}
+
+// AlignResult contains the aligned tokens and diff information
+type AlignResult struct {
+	Tokens       []Token             // Aligned tokens with timestamps
+	Segments     []Segment           // Redistributed segments
+	RawText      string              // Original Whisper output
+	Diff         []AlignmentDiffItem // Character-by-character diff
+	OriginalText string              // Original text from tokens
+}
+
 // AlignTokensWithText aligns Whisper text with original tokens, preserving timestamps
 // where characters match and interpolating timestamps for new characters.
 //
@@ -298,6 +313,16 @@ func distributeUniformly(runes []rune, startTime, endTime float64) []Token {
 // AlignTokensForSegments aligns Whisper text with original tokens across multiple segments,
 // then redistributes aligned tokens back to segment boundaries
 func AlignTokensForSegments(originalTokens []Token, whisperText string, segments []Segment, startIdx, endIdx int) ([]Token, []Segment) {
+	result := AlignTokensForSegmentsWithDiff(originalTokens, whisperText, segments, startIdx, endIdx)
+	return result.Tokens, result.Segments
+}
+
+// AlignTokensForSegmentsWithDiff aligns Whisper text with original tokens and returns full diff information
+func AlignTokensForSegmentsWithDiff(originalTokens []Token, whisperText string, segments []Segment, startIdx, endIdx int) *AlignResult {
+	result := &AlignResult{
+		RawText: whisperText,
+	}
+
 	// Step 1: Collect tokens from target segments
 	var segmentTokens []Token
 	for _, token := range originalTokens {
@@ -320,13 +345,47 @@ func AlignTokensForSegments(originalTokens []Token, whisperText string, segments
 		}
 	}
 
-	// Step 2: Align tokens with Whisper text
-	alignedTokens := AlignTokensWithText(segmentTokens, whisperText)
-	if len(alignedTokens) == 0 {
-		return nil, nil
+	// Build original text
+	for _, token := range segmentTokens {
+		result.OriginalText += token.Text
 	}
 
-	// Step 3: Redistribute aligned tokens to segments
+	// Step 2: Compute alignment and build diff
+	originalRunes := []rune(result.OriginalText)
+	whisperRunes := []rune(whisperText)
+	alignment := computeAlignment(originalRunes, whisperRunes)
+
+	// Build diff from alignment
+	for _, entry := range alignment {
+		switch entry.op {
+		case opMatch:
+			result.Diff = append(result.Diff, AlignmentDiffItem{
+				Char: string(entry.whisperRune),
+				Op:   "match",
+			})
+		case opInsert:
+			result.Diff = append(result.Diff, AlignmentDiffItem{
+				Char: string(entry.whisperRune),
+				Op:   "insert",
+			})
+		case opDelete:
+			if entry.origIdx >= 0 && entry.origIdx < len(originalRunes) {
+				result.Diff = append(result.Diff, AlignmentDiffItem{
+					Char: string(originalRunes[entry.origIdx]),
+					Op:   "delete",
+				})
+			}
+		}
+	}
+
+	// Step 3: Align tokens with Whisper text
+	alignedTokens := AlignTokensWithText(segmentTokens, whisperText)
+	if len(alignedTokens) == 0 {
+		return result
+	}
+	result.Tokens = alignedTokens
+
+	// Step 4: Redistribute aligned tokens to segments
 	newSegments := make([]Segment, 0, endIdx-startIdx+1)
 	for i := startIdx; i <= endIdx && i < len(segments); i++ {
 		seg := segments[i]
@@ -350,6 +409,7 @@ func AlignTokensForSegments(originalTokens []Token, whisperText string, segments
 			EndTime:   seg.EndTime,
 		})
 	}
+	result.Segments = newSegments
 
-	return alignedTokens, newSegments
+	return result
 }
