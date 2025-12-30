@@ -147,10 +147,8 @@ func MergeTokens(original []Token, replacement []Token, startTime, endTime float
 }
 
 // MergeSegments replaces segments in the specified index range with new segment info
-// and regenerates segments from merged tokens
+// Preserves the original segment time boundaries to maintain SenseVoice's segmentation
 func MergeSegments(original []Segment, startIdx, endIdx int, newTokens []Token) []Segment {
-	// For now, we regenerate segments from tokens
-	// This is a simplified approach - segments will be rebuilt from token timestamps
 	var result []Segment
 
 	// Keep segments before the replacement range
@@ -158,22 +156,23 @@ func MergeSegments(original []Segment, startIdx, endIdx int, newTokens []Token) 
 		result = append(result, original[i])
 	}
 
-	// Create a segment for the new tokens if there are any
-	if len(newTokens) > 0 {
+	// Create a segment for the new tokens, preserving original boundaries
+	if len(newTokens) > 0 && startIdx < len(original) {
+		// Get original time boundaries from the selected segment range
+		originalStartTime := original[startIdx].StartTime
+		originalEndTime := original[endIdx].EndTime
+
+		// Build text from new tokens
 		var text string
-		var startTime, endTime float64
-		startTime = float64(newTokens[0].StartTime)
 		for _, token := range newTokens {
 			text += token.Text
-			tokenEnd := float64(token.StartTime + token.Duration)
-			if tokenEnd > endTime {
-				endTime = tokenEnd
-			}
 		}
+
+		// Create new segment with original boundaries but new text
 		result = append(result, Segment{
 			Text:      text,
-			StartTime: startTime,
-			EndTime:   endTime,
+			StartTime: originalStartTime,
+			EndTime:   originalEndTime,
 		})
 	}
 
