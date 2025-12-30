@@ -179,6 +179,8 @@ func (i *AudioIngester) CreateTranscriptionJob(ctx context.Context, sourceID str
 	switch model {
 	case storage.ASRModelSenseVoice:
 		jobType = storage.JobTypeTranscribeSenseVoice
+	case storage.ASRModelSenseVoiceBeam:
+		jobType = storage.JobTypeTranscribeSenseVoiceBeam
 	case storage.ASRModelReazonSpeech:
 		jobType = storage.JobTypeTranscribeReazonSpeech
 	}
@@ -241,7 +243,8 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 	reportProgress(10, "initializing")
 
 	// Determine which model to use based on job type
-	useSenseVoice := job.Type == storage.JobTypeTranscribeSenseVoice
+	useSenseVoice := job.Type == storage.JobTypeTranscribeSenseVoice || job.Type == storage.JobTypeTranscribeSenseVoiceBeam
+	useBeamSearch := job.Type == storage.JobTypeTranscribeSenseVoiceBeam
 
 	// Process each file
 	var allResults []*asr.Result
@@ -252,7 +255,12 @@ func (i *AudioIngester) ProcessTranscription(ctx context.Context, job *sqlc.Proc
 
 	if useSenseVoice {
 		// === SenseVoice Model ===
-		svRecognizer, err := asr.NewSenseVoiceRecognizer(i.senseVoiceConfig)
+		svConfig := *i.senseVoiceConfig // Copy config
+		if useBeamSearch {
+			svConfig.DecodingMethod = "modified_beam_search"
+			svConfig.MaxActivePaths = 4
+		}
+		svRecognizer, err := asr.NewSenseVoiceRecognizer(&svConfig)
 		if err != nil {
 			return fmt.Errorf("failed to create SenseVoice recognizer: %w", err)
 		}

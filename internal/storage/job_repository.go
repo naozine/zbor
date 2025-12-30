@@ -169,8 +169,9 @@ const (
 	JobTypeTranscribe = "transcribe" // Default (ReazonSpeech with overlap)
 
 	// Model-specific transcription types
-	JobTypeTranscribeReazonSpeech = "transcribe:reazonspeech"
-	JobTypeTranscribeSenseVoice   = "transcribe:sensevoice"
+	JobTypeTranscribeReazonSpeech   = "transcribe:reazonspeech"
+	JobTypeTranscribeSenseVoice     = "transcribe:sensevoice"
+	JobTypeTranscribeSenseVoiceBeam = "transcribe:sensevoice:beam" // SenseVoice with beam search
 
 	JobTypeFetch     = "fetch"
 	JobTypeSummarize = "summarize"
@@ -179,8 +180,9 @@ const (
 
 // ASR Model types
 const (
-	ASRModelReazonSpeech = "reazonspeech"
-	ASRModelSenseVoice   = "sensevoice"
+	ASRModelReazonSpeech   = "reazonspeech"
+	ASRModelSenseVoice     = "sensevoice"
+	ASRModelSenseVoiceBeam = "sensevoice:beam" // SenseVoice with beam search
 )
 
 // ジョブステータス

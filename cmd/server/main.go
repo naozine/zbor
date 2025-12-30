@@ -123,6 +123,7 @@ func main() {
 	w.RegisterHandler(storage.JobTypeTranscribe, transcribeHandler)
 	w.RegisterHandler(storage.JobTypeTranscribeReazonSpeech, transcribeHandler)
 	w.RegisterHandler(storage.JobTypeTranscribeSenseVoice, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeSenseVoiceBeam, transcribeHandler)
 	w.Start(ctx)
 	defer w.Stop()
 

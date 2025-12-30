@@ -432,7 +432,12 @@ func (h *AudioHandler) RetranscribeFull(c echo.Context) error {
 	}
 
 	// Validate model
-	if model != storage.ASRModelReazonSpeech && model != storage.ASRModelSenseVoice {
+	validModels := map[string]bool{
+		storage.ASRModelReazonSpeech: true,
+		storage.ASRModelSenseVoice:   true,
+		// Note: sensevoice:beam is not supported yet by sherpa-onnx
+	}
+	if !validModels[model] {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid model: must be 'reazonspeech' or 'sensevoice'"})
 	}
 

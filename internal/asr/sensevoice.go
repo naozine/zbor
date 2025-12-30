@@ -14,21 +14,25 @@ import (
 
 // SenseVoiceConfig holds configuration for SenseVoice model
 type SenseVoiceConfig struct {
-	ModelDir   string
-	Language   string // zh, en, ja, ko, yue, auto
-	UseInt8    bool
-	NumThreads int
-	SampleRate int
+	ModelDir       string
+	Language       string // zh, en, ja, ko, yue, auto
+	UseInt8        bool
+	NumThreads     int
+	SampleRate     int
+	DecodingMethod string // greedy_search or modified_beam_search
+	MaxActivePaths int    // for beam search (default: 4)
 }
 
 // DefaultSenseVoiceConfig returns default SenseVoice configuration
 func DefaultSenseVoiceConfig(modelDir string) *SenseVoiceConfig {
 	return &SenseVoiceConfig{
-		ModelDir:   modelDir,
-		Language:   "ja",
-		UseInt8:    true,
-		NumThreads: 4,
-		SampleRate: 16000,
+		ModelDir:       modelDir,
+		Language:       "ja",
+		UseInt8:        true,
+		NumThreads:     4,
+		SampleRate:     16000,
+		DecodingMethod: "greedy_search",
+		MaxActivePaths: 4,
 	}
 }
 
@@ -59,6 +63,16 @@ func NewSenseVoiceRecognizer(config *SenseVoiceConfig) (*SenseVoiceRecognizer, e
 		return nil, fmt.Errorf("tokens file not found: %s", tokensPath)
 	}
 
+	// Set decoding method (default: greedy_search)
+	decodingMethod := config.DecodingMethod
+	if decodingMethod == "" {
+		decodingMethod = "greedy_search"
+	}
+	maxActivePaths := config.MaxActivePaths
+	if maxActivePaths <= 0 {
+		maxActivePaths = 4
+	}
+
 	sherpaConfig := sherpa.OfflineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
 			SampleRate: config.SampleRate,
@@ -74,6 +88,8 @@ func NewSenseVoiceRecognizer(config *SenseVoiceConfig) (*SenseVoiceRecognizer, e
 			NumThreads: config.NumThreads,
 			Debug:      0,
 		},
+		DecodingMethod: decodingMethod,
+		MaxActivePaths: maxActivePaths,
 	}
 
 	recognizer := sherpa.NewOfflineRecognizer(&sherpaConfig)
