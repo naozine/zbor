@@ -273,6 +273,7 @@ type RetranscribeRequest struct {
 	SegmentStart int     `json:"segment_start"` // Start segment index (0-based)
 	SegmentEnd   int     `json:"segment_end"`   // End segment index (inclusive)
 	Tempo        float64 `json:"tempo"`         // Audio tempo (0.85-1.0)
+	Model        string  `json:"model"`         // "reazonspeech" (default) or "sensevoice"
 }
 
 // Retranscribe handles partial re-transcription of audio segments
@@ -357,22 +358,43 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	startTime := transcript.Segments[req.SegmentStart].StartTime
 	endTime := transcript.Segments[req.SegmentEnd].EndTime
 
-	// Create recognizer
-	recognizer, err := asr.NewRecognizer(h.asrConfig)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create recognizer"})
+	// Default to reazonspeech if not specified
+	model := req.Model
+	if model == "" {
+		model = storage.ASRModelReazonSpeech
 	}
-	defer recognizer.Close()
 
-	// Perform partial transcription
-	partialResult, err := recognizer.TranscribePartial(audioPath, asr.PartialTranscribeOptions{
+	// Perform partial transcription based on model
+	opts := asr.PartialTranscribeOptions{
 		StartTime: startTime,
 		EndTime:   endTime,
 		Tempo:     req.Tempo,
 		ChunkSec:  20,
-	})
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
+	}
+
+	var partialResult *asr.Result
+	switch model {
+	case storage.ASRModelSenseVoice:
+		svConfig := asr.DefaultSenseVoiceConfig("models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17")
+		svRecognizer, err := asr.NewSenseVoiceRecognizer(svConfig)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create sensevoice recognizer: " + err.Error()})
+		}
+		defer svRecognizer.Close()
+		partialResult, err = svRecognizer.TranscribePartial(audioPath, opts)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
+		}
+	default: // reazonspeech
+		recognizer, err := asr.NewRecognizer(h.asrConfig)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create recognizer: " + err.Error()})
+		}
+		defer recognizer.Close()
+		partialResult, err = recognizer.TranscribePartial(audioPath, opts)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "transcription failed: " + err.Error()})
+		}
 	}
 
 	// Merge tokens
@@ -405,6 +427,7 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		"segments_range": []int{req.SegmentStart, req.SegmentEnd},
 		"time_range":     []float64{startTime, endTime},
 		"tempo":          req.Tempo,
+		"model":          model,
 		"new_tokens":     len(partialResult.Tokens),
 	})
 }

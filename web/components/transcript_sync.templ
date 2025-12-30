@@ -177,6 +177,13 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 					</div>
 					<div class="flex items-center space-x-4">
 						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Model:</label>
+							<select id="retranscribe-model" class="text-sm border-gray-300 rounded-md">
+								<option value="reazonspeech" selected>ReazonSpeech</option>
+								<option value="sensevoice">SenseVoice</option>
+							</select>
+						</div>
+						<div class="flex items-center space-x-2">
 							<label class="text-sm text-gray-600">Tempo:</label>
 							<select id="retranscribe-tempo" class="text-sm border-gray-300 rounded-md">
 								<option value="0.5">0.5x (超低速)</option>
@@ -650,6 +657,8 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			});
 
 			// Retranscribe button
+			const retranscribeModel = document.getElementById('retranscribe-model');
+
 			retranscribeBtn.addEventListener('click', async () => {
 				if (selectedSegments.size === 0) return;
 
@@ -657,6 +666,7 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 				const segmentStart = sortedIndices[0];
 				const segmentEnd = sortedIndices[sortedIndices.length - 1];
 				const tempo = parseFloat(retranscribeTempo.value);
+				const model = retranscribeModel.value;
 
 				processingOverlay.classList.remove('hidden');
 
@@ -667,7 +677,8 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 						body: JSON.stringify({
 							segment_start: segmentStart,
 							segment_end: segmentEnd,
-							tempo: tempo
+							tempo: tempo,
+							model: model
 						})
 					});
 

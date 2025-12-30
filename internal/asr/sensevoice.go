@@ -111,6 +111,102 @@ func (r *SenseVoiceRecognizer) Close() {
 	}
 }
 
+// TranscribePartial transcribes a specific time range of an audio file
+// Returns tokens with timestamps adjusted to the original audio time
+func (r *SenseVoiceRecognizer) TranscribePartial(filePath string, opts PartialTranscribeOptions) (*Result, error) {
+	if opts.Tempo <= 0 {
+		opts.Tempo = 0.95
+	}
+	if opts.ChunkSec <= 0 {
+		opts.ChunkSec = 20
+	}
+
+	duration := opts.EndTime - opts.StartTime
+	if duration <= 0 {
+		return nil, fmt.Errorf("invalid time range: %.2f - %.2f", opts.StartTime, opts.EndTime)
+	}
+
+	// Build ffmpeg command to extract and process the time range
+	args := []string{
+		"-ss", fmt.Sprintf("%.3f", opts.StartTime),
+		"-i", filePath,
+		"-t", fmt.Sprintf("%.3f", duration),
+	}
+
+	// Add tempo filter if not 1.0
+	if opts.Tempo != 1.0 {
+		args = append(args, "-af", fmt.Sprintf("atempo=%.2f", opts.Tempo))
+	}
+
+	args = append(args,
+		"-f", "s16le",
+		"-acodec", "pcm_s16le",
+		"-ar", fmt.Sprintf("%d", r.config.SampleRate),
+		"-ac", "1",
+		"-loglevel", "error",
+		"pipe:1",
+	)
+
+	cmd := exec.Command("ffmpeg", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start ffmpeg: %w", err)
+	}
+
+	// Process audio in chunks
+	reader := bufio.NewReader(stdout)
+	chunkSamples := r.config.SampleRate * opts.ChunkSec
+	chunkBytes := chunkSamples * 2
+
+	var allTokens []Token
+	var allText strings.Builder
+	var processedSamples int64
+
+	for {
+		buffer := make([]byte, chunkBytes)
+		n, err := io.ReadFull(reader, buffer)
+		if n == 0 {
+			break
+		}
+
+		samples := bytesToFloat32SV(buffer[:n])
+
+		// Calculate time offset for this chunk (in slowed audio time)
+		rawChunkOffset := float64(processedSamples) / float64(r.config.SampleRate)
+
+		// Transcribe chunk
+		tokens := r.transcribeBytes(samples, 0) // Use 0 offset, we'll adjust below
+
+		// Adjust token timestamps
+		for _, token := range tokens {
+			adjustedToken := Token{
+				Text:      token.Text,
+				StartTime: float32(opts.StartTime + (rawChunkOffset+float64(token.StartTime))*opts.Tempo),
+				Duration:  token.Duration * float32(opts.Tempo),
+			}
+			allTokens = append(allTokens, adjustedToken)
+			allText.WriteString(token.Text)
+		}
+
+		processedSamples += int64(len(samples))
+
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+	}
+
+	cmd.Wait()
+
+	return &Result{
+		Text:   allText.String(),
+		Tokens: allTokens,
+	}, nil
+}
+
 // TranscribeFile transcribes an audio file using SenseVoice
 func (r *SenseVoiceRecognizer) TranscribeFile(inputPath string, chunkSec int, onProgress ProgressCallback) (*Result, error) {
 	if chunkSec <= 0 {
