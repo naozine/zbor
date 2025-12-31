@@ -444,20 +444,59 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 										<option value="2000">2000ms</option>
 									</select>
 								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">パディング:</label>
+									<select id="modal-boundary-padding" class="text-xs border-gray-300 rounded py-1">
+										<option value="0">0ms</option>
+										<option value="100">100ms</option>
+										<option value="200" selected>200ms</option>
+										<option value="300">300ms</option>
+										<option value="500">500ms</option>
+									</select>
+								</div>
 							</div>
 						</div>
-						<!-- Boundary Adjustment Result -->
-						<div id="boundary-result" class="hidden mt-2 p-2 bg-blue-50 rounded-md text-sm">
-							<div class="flex items-center space-x-4">
-								<span class="text-gray-600">時間範囲:</span>
-								<span class="font-mono">
-									<span id="boundary-original-range" class="text-gray-500"></span>
-									<span class="mx-2">→</span>
-									<span id="boundary-adjusted-range" class="text-blue-700 font-medium"></span>
-								</span>
-								<span id="boundary-diff" class="text-xs text-blue-600"></span>
+						<!-- Boundary Adjustment Preview -->
+						<div id="boundary-preview" class="hidden mt-2">
+							<!-- Waveform Preview -->
+							<div class="relative bg-gray-100 rounded border border-gray-200 h-16">
+								<canvas id="boundary-waveform-canvas" class="w-full h-full"></canvas>
+								<!-- Original boundary markers -->
+								<div id="boundary-marker-start-orig" class="absolute top-0 bottom-0 w-0.5 bg-gray-400 pointer-events-none" style="left: 0%"></div>
+								<div id="boundary-marker-end-orig" class="absolute top-0 bottom-0 w-0.5 bg-gray-400 pointer-events-none" style="left: 100%"></div>
+								<!-- Adjusted boundary markers -->
+								<div id="boundary-marker-start-adj" class="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none hidden" style="left: 0%"></div>
+								<div id="boundary-marker-end-adj" class="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none hidden" style="left: 100%"></div>
+								<!-- Segment region highlight -->
+								<div id="boundary-segment-region" class="absolute top-0 bottom-0 bg-yellow-200 opacity-30 pointer-events-none"></div>
+								<!-- Adjusted region highlight -->
+								<div id="boundary-adjusted-region" class="absolute top-0 bottom-0 bg-blue-200 opacity-30 pointer-events-none hidden"></div>
 							</div>
-							<div id="boundary-clusters" class="mt-1 text-xs text-gray-600"></div>
+							<!-- Time axis -->
+							<div id="boundary-time-axis" class="flex justify-between text-xs text-gray-500 mt-1">
+								<span id="boundary-time-start">0:00</span>
+								<span id="boundary-time-end">0:00</span>
+							</div>
+							<!-- Boundary Adjustment Result -->
+							<div id="boundary-result" class="hidden mt-2 p-2 bg-blue-50 rounded-md text-sm">
+								<div class="flex items-center space-x-4">
+									<span class="text-gray-600">時間範囲:</span>
+									<span class="font-mono">
+										<span id="boundary-original-range" class="text-gray-500"></span>
+										<span class="mx-2">→</span>
+										<span id="boundary-adjusted-range" class="text-blue-700 font-medium"></span>
+									</span>
+									<span id="boundary-diff" class="text-xs text-blue-600"></span>
+								</div>
+								<div id="boundary-clusters" class="mt-1 text-xs text-gray-600"></div>
+							</div>
+							<!-- Legend -->
+							<div class="mt-1 flex items-center space-x-4 text-xs text-gray-500">
+								<span class="flex items-center"><span class="inline-block w-3 h-3 bg-yellow-200 border border-yellow-300 mr-1"></span>選択範囲</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-3 bg-blue-200 border border-blue-300 mr-1"></span>調整後</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-0.5 bg-gray-400 mr-1"></span>元の境界</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-0.5 bg-blue-500 mr-1"></span>調整後の境界</span>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -1248,24 +1287,280 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			const boundaryThreshold = document.getElementById('modal-boundary-threshold');
 			const boundaryMerge = document.getElementById('modal-boundary-merge');
 			const boundarySearch = document.getElementById('modal-boundary-search');
+			const boundaryPadding = document.getElementById('modal-boundary-padding');
+			const boundaryPreview = document.getElementById('boundary-preview');
+			const boundaryWaveformCanvas = document.getElementById('boundary-waveform-canvas');
+			const boundaryMarkerStartOrig = document.getElementById('boundary-marker-start-orig');
+			const boundaryMarkerEndOrig = document.getElementById('boundary-marker-end-orig');
+			const boundaryMarkerStartAdj = document.getElementById('boundary-marker-start-adj');
+			const boundaryMarkerEndAdj = document.getElementById('boundary-marker-end-adj');
+			const boundarySegmentRegion = document.getElementById('boundary-segment-region');
+			const boundaryAdjustedRegion = document.getElementById('boundary-adjusted-region');
+			const boundaryTimeStart = document.getElementById('boundary-time-start');
+			const boundaryTimeEnd = document.getElementById('boundary-time-end');
 			const boundaryResult = document.getElementById('boundary-result');
 			const boundaryOriginalRange = document.getElementById('boundary-original-range');
 			const boundaryAdjustedRange = document.getElementById('boundary-adjusted-range');
 			const boundaryDiff = document.getElementById('boundary-diff');
 			const boundaryClusters = document.getElementById('boundary-clusters');
 
+			// Boundary preview state
+			let boundaryPreviewData = null; // { peaks, duration, segmentStart, segmentEnd }
+
 			let currentPreviewResult = null; // Store preview result for apply
 			let currentDebugInfo = null; // Store full debug info for copy
 
-			// Toggle boundary params visibility
+			// === Boundary Preview Functions ===
+
+			// Find audio clusters in peaks data (client-side implementation)
+			function findAudioClusters(peaks, samplesPerSec, startTime, endTime, threshold) {
+				const clusters = [];
+				const startIdx = Math.floor(startTime * samplesPerSec);
+				const endIdx = Math.ceil(endTime * samplesPerSec);
+
+				let currentCluster = null;
+				for (let i = Math.max(0, startIdx); i < Math.min(peaks.length, endIdx); i++) {
+					const peak = peaks[i];
+					const time = i / samplesPerSec;
+
+					if (peak >= threshold) {
+						if (!currentCluster) {
+							currentCluster = { startTime: time, endTime: time, maxPeak: peak };
+						} else {
+							currentCluster.endTime = time;
+							if (peak > currentCluster.maxPeak) currentCluster.maxPeak = peak;
+						}
+					} else {
+						if (currentCluster) {
+							clusters.push(currentCluster);
+							currentCluster = null;
+						}
+					}
+				}
+				if (currentCluster) clusters.push(currentCluster);
+				return clusters;
+			}
+
+			// Merge clusters within gap
+			function mergeClusters(clusters, mergeGapMs) {
+				if (clusters.length === 0) return [];
+				const mergeGapSec = mergeGapMs / 1000;
+				const merged = [];
+				let current = { ...clusters[0] };
+
+				for (let i = 1; i < clusters.length; i++) {
+					const next = clusters[i];
+					const gap = next.startTime - current.endTime;
+					if (gap <= mergeGapSec) {
+						current.endTime = next.endTime;
+						if (next.maxPeak > current.maxPeak) current.maxPeak = next.maxPeak;
+					} else {
+						merged.push(current);
+						current = { ...next };
+					}
+				}
+				merged.push(current);
+				return merged;
+			}
+
+			// Calculate boundary adjustment (client-side)
+			function calculateBoundaryAdjustment(peaks, samplesPerSec, segmentStart, segmentEnd, params) {
+				const searchWindowSec = params.searchMs / 1000;
+				const mergeGapSec = params.mergeGapMs / 1000;
+				const totalDuration = peaks.length / samplesPerSec;
+
+				// Search before segment
+				const searchStartBefore = Math.max(0, segmentStart - searchWindowSec);
+				let clustersBefore = findAudioClusters(peaks, samplesPerSec, searchStartBefore, segmentStart, params.threshold);
+				clustersBefore = mergeClusters(clustersBefore, params.mergeGapMs);
+
+				// Search after segment
+				const searchEndAfter = Math.min(totalDuration, segmentEnd + searchWindowSec);
+				let clustersAfter = findAudioClusters(peaks, samplesPerSec, segmentEnd, searchEndAfter, params.threshold);
+				clustersAfter = mergeClusters(clustersAfter, params.mergeGapMs);
+
+				// Adjust start
+				let newStart = segmentStart;
+				const mergedBefore = [];
+				for (let i = clustersBefore.length - 1; i >= 0; i--) {
+					const cluster = clustersBefore[i];
+					const gap = newStart - cluster.endTime;
+					if (gap <= mergeGapSec) {
+						newStart = cluster.startTime;
+						mergedBefore.unshift(cluster);
+					} else {
+						break;
+					}
+				}
+
+				// Adjust end
+				let newEnd = segmentEnd;
+				const mergedAfter = [];
+				for (const cluster of clustersAfter) {
+					const gap = cluster.startTime - newEnd;
+					if (gap <= mergeGapSec) {
+						newEnd = cluster.endTime;
+						mergedAfter.push(cluster);
+					} else {
+						break;
+					}
+				}
+
+				return {
+					originalStart: segmentStart,
+					originalEnd: segmentEnd,
+					adjustedStart: newStart,
+					adjustedEnd: newEnd,
+					startExtendedMs: Math.round((segmentStart - newStart) * 1000),
+					endExtendedMs: Math.round((newEnd - segmentEnd) * 1000),
+					mergedClusters: [...mergedBefore, ...mergedAfter]
+				};
+			}
+
+			// Draw boundary waveform preview
+			function drawBoundaryWaveform() {
+				if (!boundaryPreviewData) return;
+
+				const { peaks, duration, segmentStart, segmentEnd } = boundaryPreviewData;
+				const canvas = boundaryWaveformCanvas;
+				const ctx = canvas.getContext('2d');
+
+				// Calculate view range (segment ± search window + margin)
+				const searchMs = parseInt(boundarySearch.value);
+				const margin = 0.5; // Extra margin in seconds
+				const viewStart = Math.max(0, segmentStart - searchMs / 1000 - margin);
+				const viewEnd = Math.min(duration, segmentEnd + searchMs / 1000 + margin);
+				const viewDuration = viewEnd - viewStart;
+
+				// Set canvas resolution
+				const width = canvas.offsetWidth;
+				const height = canvas.offsetHeight;
+				canvas.width = width * 2;
+				canvas.height = height * 2;
+				ctx.scale(2, 2);
+
+				// Clear
+				ctx.clearRect(0, 0, width, height);
+
+				// Calculate peaks to show
+				const samplesPerSec = peaks.length / duration;
+				const startIdx = Math.floor(viewStart * samplesPerSec);
+				const endIdx = Math.ceil(viewEnd * samplesPerSec);
+				const peaksToShow = peaks.slice(startIdx, endIdx);
+
+				if (peaksToShow.length === 0) return;
+
+				// Draw waveform
+				const barWidth = width / peaksToShow.length;
+				const centerY = height / 2;
+				const threshold = parseFloat(boundaryThreshold.value);
+
+				for (let i = 0; i < peaksToShow.length; i++) {
+					const peak = peaksToShow[i];
+					const barHeight = peak * height * 0.9;
+					const x = i * barWidth;
+
+					// Color based on threshold
+					ctx.fillStyle = peak >= threshold ? '#6B7280' : '#D1D5DB';
+					ctx.fillRect(x, centerY - barHeight / 2, Math.max(1, barWidth - 0.5), barHeight);
+				}
+
+				// Update time axis
+				boundaryTimeStart.textContent = formatTimeMs(viewStart);
+				boundaryTimeEnd.textContent = formatTimeMs(viewEnd);
+
+				// Update segment region highlight
+				const segStartPct = ((segmentStart - viewStart) / viewDuration) * 100;
+				const segEndPct = ((segmentEnd - viewStart) / viewDuration) * 100;
+				boundarySegmentRegion.style.left = `${segStartPct}%`;
+				boundarySegmentRegion.style.width = `${segEndPct - segStartPct}%`;
+
+				// Update original boundary markers
+				boundaryMarkerStartOrig.style.left = `${segStartPct}%`;
+				boundaryMarkerEndOrig.style.left = `${segEndPct}%`;
+
+				// Calculate and show adjusted boundaries if enabled
+				if (modalAutoAdjust.checked) {
+					const params = {
+						threshold: parseFloat(boundaryThreshold.value),
+						mergeGapMs: parseInt(boundaryMerge.value),
+						searchMs: parseInt(boundarySearch.value)
+					};
+
+					const adjustment = calculateBoundaryAdjustment(peaks, samplesPerSec, segmentStart, segmentEnd, params);
+
+					// Apply padding to adjusted boundaries
+					const paddingMs = parseInt(boundaryPadding.value);
+					const paddingSec = paddingMs / 1000;
+					let paddedStart = adjustment.adjustedStart - paddingSec;
+					let paddedEnd = adjustment.adjustedEnd + paddingSec;
+					if (paddedStart < 0) paddedStart = 0;
+					if (paddedEnd > duration) paddedEnd = duration;
+
+					// Update adjusted boundary markers (with padding)
+					const adjStartPct = ((paddedStart - viewStart) / viewDuration) * 100;
+					const adjEndPct = ((paddedEnd - viewStart) / viewDuration) * 100;
+
+					boundaryMarkerStartAdj.style.left = `${adjStartPct}%`;
+					boundaryMarkerEndAdj.style.left = `${adjEndPct}%`;
+					boundaryMarkerStartAdj.classList.remove('hidden');
+					boundaryMarkerEndAdj.classList.remove('hidden');
+
+					// Update adjusted region
+					boundaryAdjustedRegion.style.left = `${adjStartPct}%`;
+					boundaryAdjustedRegion.style.width = `${adjEndPct - adjStartPct}%`;
+					boundaryAdjustedRegion.classList.remove('hidden');
+
+					// Update result text (show padded values)
+					boundaryOriginalRange.textContent = `${formatTimeMs(adjustment.originalStart)} - ${formatTimeMs(adjustment.originalEnd)}`;
+					boundaryAdjustedRange.textContent = `${formatTimeMs(paddedStart)} - ${formatTimeMs(paddedEnd)}`;
+
+					const startExtMs = Math.round((segmentStart - paddedStart) * 1000);
+					const endExtMs = Math.round((paddedEnd - segmentEnd) * 1000);
+					const diffParts = [];
+					if (startExtMs !== 0) {
+						diffParts.push(`開始: ${startExtMs > 0 ? '-' : '+'}${Math.abs(startExtMs)}ms`);
+					}
+					if (endExtMs !== 0) {
+						diffParts.push(`終了: ${endExtMs > 0 ? '+' : '-'}${Math.abs(endExtMs)}ms`);
+					}
+					boundaryDiff.textContent = diffParts.length > 0 ? `(${diffParts.join(', ')})` : '(変更なし)';
+
+					if (adjustment.mergedClusters.length > 0) {
+						const clusterInfo = adjustment.mergedClusters.map(c => {
+							const duration = ((c.endTime - c.startTime) * 1000).toFixed(0);
+							return `${formatTimeMs(c.startTime)}-${formatTimeMs(c.endTime)} (${duration}ms)`;
+						}).join(' | ');
+						boundaryClusters.textContent = `検出クラスタ: ${clusterInfo}`;
+					} else {
+						boundaryClusters.textContent = '追加クラスタなし';
+					}
+
+					boundaryResult.classList.remove('hidden');
+				} else {
+					// Hide adjusted markers
+					boundaryMarkerStartAdj.classList.add('hidden');
+					boundaryMarkerEndAdj.classList.add('hidden');
+					boundaryAdjustedRegion.classList.add('hidden');
+					boundaryResult.classList.add('hidden');
+				}
+			}
+
+			// Toggle boundary params visibility and update preview
 			modalAutoAdjust.addEventListener('change', () => {
 				if (modalAutoAdjust.checked) {
 					boundaryParams.classList.remove('hidden');
 				} else {
 					boundaryParams.classList.add('hidden');
-					boundaryResult.classList.add('hidden');
 				}
+				drawBoundaryWaveform();
 			});
+
+			// Redraw on parameter change
+			boundaryThreshold.addEventListener('change', drawBoundaryWaveform);
+			boundaryMerge.addEventListener('change', drawBoundaryWaveform);
+			boundarySearch.addEventListener('change', drawBoundaryWaveform);
+			boundaryPadding.addEventListener('change', drawBoundaryWaveform);
 
 			// Format time as MM:SS.mm
 			function formatTimeMs(seconds) {
@@ -1386,11 +1681,26 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				currentDebugInfo = null;
 				updateAlignInfoVisibility(false);
 
-				// Reset boundary adjustment UI
+				// Reset and initialize boundary adjustment preview
 				boundaryResult.classList.add('hidden');
+				boundaryPreviewData = null;
 
-				// Show modal
+				// Show modal first (so canvas has dimensions)
 				retranscribeModal.classList.remove('hidden');
+
+				// Fetch waveform data and show preview
+				const waveformResponse = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=50`);
+				if (waveformResponse.ok) {
+					const waveData = await waveformResponse.json();
+					boundaryPreviewData = {
+						peaks: waveData.peaks,
+						duration: waveData.duration,
+						segmentStart: startTime,
+						segmentEnd: endTime
+					};
+					boundaryPreview.classList.remove('hidden');
+					drawBoundaryWaveform();
+				}
 			}
 
 			// Close modal
@@ -1399,6 +1709,9 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				currentPreviewResult = null;
 				currentDebugInfo = null;
 				updateAlignInfoVisibility(false);
+				// Reset boundary preview
+				boundaryPreviewData = null;
+				boundaryPreview.classList.add('hidden');
 			}
 
 			// Copy debug info to clipboard
@@ -1452,6 +1765,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 						requestBody.boundary_threshold = parseFloat(boundaryThreshold.value);
 						requestBody.boundary_merge_gap_ms = parseInt(boundaryMerge.value);
 						requestBody.boundary_search_ms = parseInt(boundarySearch.value);
+						requestBody.boundary_padding_ms = parseInt(boundaryPadding.value);
 					}
 
 					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
@@ -1471,7 +1785,8 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 							auto_adjust_boundary: modalAutoAdjust.checked,
 							boundary_threshold: parseFloat(boundaryThreshold.value),
 							boundary_merge_gap_ms: parseInt(boundaryMerge.value),
-							boundary_search_ms: parseInt(boundarySearch.value)
+							boundary_search_ms: parseInt(boundarySearch.value),
+							boundary_padding_ms: parseInt(boundaryPadding.value)
 						};
 
 						// Store full debug info
@@ -1569,6 +1884,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 						requestBody.boundary_threshold = currentPreviewResult.boundary_threshold;
 						requestBody.boundary_merge_gap_ms = currentPreviewResult.boundary_merge_gap_ms;
 						requestBody.boundary_search_ms = currentPreviewResult.boundary_search_ms;
+						requestBody.boundary_padding_ms = currentPreviewResult.boundary_padding_ms;
 					}
 
 					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {

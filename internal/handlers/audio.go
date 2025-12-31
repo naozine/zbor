@@ -411,6 +411,7 @@ type RetranscribeRequest struct {
 	BoundaryThreshold  float64 `json:"boundary_threshold"`   // Audio detection threshold (0.01-0.10, default 0.03)
 	BoundaryMergeGapMs int     `json:"boundary_merge_gap_ms"` // Merge gap in ms (100-500, default 300)
 	BoundarySearchMs   int     `json:"boundary_search_ms"`   // Search window in ms (500-2000, default 1000)
+	BoundaryPaddingMs  int     `json:"boundary_padding_ms"`  // Padding before/after adjusted boundaries (ms, default 200)
 }
 
 // RetranscribeResponse represents the response for preview mode
@@ -583,11 +584,30 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 			// Adjust boundaries
 			result := asr.AdjustBoundaries(peaks, 50, startTime, endTime, params)
 
-			// Update time range
-			startTime = result.AdjustedStart
-			endTime = result.AdjustedEnd
+			// Apply padding (default 200ms)
+			paddingMs := req.BoundaryPaddingMs
+			if paddingMs <= 0 {
+				paddingMs = 200 // Default padding
+			}
+			if paddingMs > 500 {
+				paddingMs = 500 // Max padding
+			}
+			paddingSec := float64(paddingMs) / 1000.0
 
-			// Build response info
+			// Update time range with padding
+			adjustedStart := result.AdjustedStart - paddingSec
+			adjustedEnd := result.AdjustedEnd + paddingSec
+			if adjustedStart < 0 {
+				adjustedStart = 0
+			}
+			if adjustedEnd > duration {
+				adjustedEnd = duration
+			}
+
+			startTime = adjustedStart
+			endTime = adjustedEnd
+
+			// Build response info (include padding in adjusted values)
 			var clusters []AudioClusterInfo
 			for _, c := range result.MergedClusters {
 				clusters = append(clusters, AudioClusterInfo{
@@ -599,10 +619,10 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 			boundaryInfo = &BoundaryAdjustmentInfo{
 				OriginalStart:   result.OriginalStart,
 				OriginalEnd:     result.OriginalEnd,
-				AdjustedStart:   result.AdjustedStart,
-				AdjustedEnd:     result.AdjustedEnd,
-				StartExtendedMs: result.StartExtendedMs,
-				EndExtendedMs:   result.EndExtendedMs,
+				AdjustedStart:   adjustedStart,
+				AdjustedEnd:     adjustedEnd,
+				StartExtendedMs: int((result.OriginalStart - adjustedStart) * 1000),
+				EndExtendedMs:   int((adjustedEnd - result.OriginalEnd) * 1000),
 				MergedClusters:  clusters,
 			}
 		}
@@ -699,6 +719,18 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 		mergedSegments = asr.MergeSegments(transcript.Segments, req.SegmentStart, req.SegmentEnd, partialResult.Tokens)
 	}
 
+	// Apply boundary adjustment to merged segments if enabled
+	if boundaryInfo != nil && len(mergedSegments) > 0 {
+		// Adjust first segment's start time
+		if req.SegmentStart < len(mergedSegments) && boundaryInfo.AdjustedStart < mergedSegments[req.SegmentStart].StartTime {
+			mergedSegments[req.SegmentStart].StartTime = boundaryInfo.AdjustedStart
+		}
+		// Adjust last segment's end time
+		if req.SegmentEnd < len(mergedSegments) && boundaryInfo.AdjustedEnd > mergedSegments[req.SegmentEnd].EndTime {
+			mergedSegments[req.SegmentEnd].EndTime = boundaryInfo.AdjustedEnd
+		}
+	}
+
 	// Build original segments info for response
 	originalSegments := make([]RetranscribeSegmentInfo, 0, req.SegmentEnd-req.SegmentStart+1)
 	for i := req.SegmentStart; i <= req.SegmentEnd && i < len(transcript.Segments); i++ {
@@ -724,9 +756,11 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 
 	// Build new segments info for response
 	// Use mergedTokens which has adjusted timestamps (important for Whisper)
+	// Note: mergedSegments already has boundary adjustment applied if enabled
 	newSegments := make([]RetranscribeSegmentInfo, 0, req.SegmentEnd-req.SegmentStart+1)
 	for i := req.SegmentStart; i <= req.SegmentEnd && i < len(mergedSegments); i++ {
 		seg := mergedSegments[i]
+
 		// Find tokens in this segment from merged result (which has correct timestamps)
 		var segTokens []RetranscribeTokenInfo
 		for _, t := range mergedTokens {
