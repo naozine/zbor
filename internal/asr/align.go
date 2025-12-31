@@ -383,24 +383,82 @@ func AlignTokensForSegmentsWithDiff(originalTokens []Token, whisperText string, 
 	if len(alignedTokens) == 0 {
 		return result
 	}
-	result.Tokens = alignedTokens
 
-	// Step 4: Redistribute aligned tokens to segments
-	newSegments := make([]Segment, 0, endIdx-startIdx+1)
+	// Step 4: Redistribute aligned tokens to segments by duration ratio
+	// This is similar to MergeSegmentsByRatio - we distribute tokens proportionally
+	// to segment duration to handle gaps between segments
+	var totalDuration float64
 	for i := startIdx; i <= endIdx && i < len(segments); i++ {
 		seg := segments[i]
-		var segText string
+		duration := seg.EndTime - seg.StartTime
+		if duration > 0 {
+			totalDuration += duration
+		}
+	}
 
-		for _, token := range alignedTokens {
-			tokenStart := float64(token.StartTime)
-			// Token belongs to this segment if its timestamp falls within
-			if tokenStart >= seg.StartTime && tokenStart < seg.EndTime {
-				segText += token.Text
+	// If all segments have zero duration, distribute evenly
+	numSegments := endIdx - startIdx + 1
+	if numSegments > len(segments)-startIdx {
+		numSegments = len(segments) - startIdx
+	}
+
+	var finalTokens []Token
+	newSegments := make([]Segment, 0, numSegments)
+	tokenIndex := 0
+
+	for i := startIdx; i <= endIdx && i < len(segments); i++ {
+		seg := segments[i]
+		duration := seg.EndTime - seg.StartTime
+
+		var segText string
+		var tokenCount int
+
+		if totalDuration > 0 && duration > 0 {
+			// Distribute by duration ratio
+			ratio := duration / totalDuration
+			tokenCount = int(float64(len(alignedTokens)) * ratio)
+			// Ensure at least 1 token per segment if tokens remain
+			if tokenCount == 0 && tokenIndex < len(alignedTokens) {
+				tokenCount = 1
 			}
-			// Handle boundary case for last segment
-			if i == endIdx && tokenStart >= seg.EndTime && tokenStart <= seg.EndTime+0.01 {
-				segText += token.Text
+		} else if totalDuration == 0 || duration == 0 {
+			// Zero duration segment(s): distribute remaining tokens evenly
+			segIdx := i - startIdx
+			remainingSegs := numSegments - segIdx
+			remainingTokens := len(alignedTokens) - tokenIndex
+			if remainingSegs > 0 && remainingTokens > 0 {
+				tokenCount = remainingTokens / remainingSegs
+				if tokenCount == 0 {
+					tokenCount = 1
+				}
 			}
+		}
+
+		// Last segment gets all remaining tokens
+		if i == endIdx {
+			tokenCount = len(alignedTokens) - tokenIndex
+		}
+
+		// Assign tokens to this segment and adjust timestamps
+		for j := 0; j < tokenCount && tokenIndex < len(alignedTokens); j++ {
+			token := alignedTokens[tokenIndex]
+			segText += token.Text
+
+			// Recalculate timestamp to fit within segment
+			var newStartTime float32
+			if duration > 0 && tokenCount > 0 {
+				tokenRatio := float64(j) / float64(tokenCount)
+				newStartTime = float32(seg.StartTime + duration*tokenRatio)
+			} else {
+				newStartTime = float32(seg.StartTime)
+			}
+
+			finalTokens = append(finalTokens, Token{
+				Text:      token.Text,
+				StartTime: newStartTime,
+				Duration:  float32(duration / float64(max(tokenCount, 1))),
+			})
+			tokenIndex++
 		}
 
 		newSegments = append(newSegments, Segment{
@@ -409,6 +467,8 @@ func AlignTokensForSegmentsWithDiff(originalTokens []Token, whisperText string, 
 			EndTime:   seg.EndTime,
 		})
 	}
+
+	result.Tokens = finalTokens
 	result.Segments = newSegments
 
 	return result

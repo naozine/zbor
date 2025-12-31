@@ -235,16 +235,26 @@ func MergeSegmentsByRatio(original []Segment, startIdx, endIdx int, newTokens []
 		var segText string
 		var segTokens []Token
 
+		var tokenCount int
 		if totalDuration > 0 && duration > 0 {
 			// Calculate number of tokens for this segment based on duration ratio
 			ratio := duration / totalDuration
-			tokenCount := int(float64(len(newTokens)) * ratio)
-
-			// Last segment gets all remaining tokens
-			if i == endIdx {
-				tokenCount = len(newTokens) - tokenIndex
+			tokenCount = int(float64(len(newTokens)) * ratio)
+			// Ensure at least 1 token per segment if tokens remain
+			if tokenCount == 0 && tokenIndex < len(newTokens) {
+				tokenCount = 1
 			}
+		} else if tokenIndex < len(newTokens) {
+			// Zero duration segment: give at least 1 token if available
+			tokenCount = 1
+		}
 
+		// Last segment gets all remaining tokens
+		if i == endIdx {
+			tokenCount = len(newTokens) - tokenIndex
+		}
+
+		if tokenCount > 0 {
 			// Assign tokens and adjust their timestamps to fit within segment
 			for j := 0; j < tokenCount && tokenIndex < len(newTokens); j++ {
 				token := newTokens[tokenIndex]
@@ -305,25 +315,34 @@ func MergeTokensBySegmentRatio(original []Token, newTokens []Token, segments []S
 		seg := segments[i]
 		duration := seg.EndTime - seg.StartTime
 
+		var tokenCount int
 		if totalDuration > 0 && duration > 0 {
 			ratio := duration / totalDuration
-			tokenCount := int(float64(len(newTokens)) * ratio)
-
-			if i == endIdx {
-				tokenCount = len(newTokens) - tokenIndex
+			tokenCount = int(float64(len(newTokens)) * ratio)
+			// Ensure at least 1 token per segment if tokens remain
+			if tokenCount == 0 && tokenIndex < len(newTokens) {
+				tokenCount = 1
 			}
+		} else if tokenIndex < len(newTokens) {
+			// Zero duration segment: give at least 1 token if available
+			tokenCount = 1
+		}
 
-			for j := 0; j < tokenCount && tokenIndex < len(newTokens); j++ {
-				token := newTokens[tokenIndex]
-				tokenRatio := float64(j) / float64(max(tokenCount, 1))
-				adjustedToken := Token{
-					Text:      token.Text,
-					StartTime: float32(seg.StartTime + duration*tokenRatio),
-					Duration:  float32(duration / float64(max(tokenCount, 1))),
-				}
-				result = append(result, adjustedToken)
-				tokenIndex++
+		// Last segment gets all remaining tokens
+		if i == endIdx {
+			tokenCount = len(newTokens) - tokenIndex
+		}
+
+		for j := 0; j < tokenCount && tokenIndex < len(newTokens); j++ {
+			token := newTokens[tokenIndex]
+			tokenRatio := float64(j) / float64(max(tokenCount, 1))
+			adjustedToken := Token{
+				Text:      token.Text,
+				StartTime: float32(seg.StartTime + duration*tokenRatio),
+				Duration:  float32(duration / float64(max(tokenCount, 1))),
 			}
+			result = append(result, adjustedToken)
+			tokenIndex++
 		}
 	}
 
