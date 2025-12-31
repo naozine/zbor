@@ -153,6 +153,78 @@ func (h *AudioHandler) Stream(c echo.Context) error {
 	return c.File(wavPath)
 }
 
+// WaveformResponse represents the waveform data response
+type WaveformResponse struct {
+	Peaks    []float64 `json:"peaks"`    // Peak amplitude values (0-1)
+	Duration float64   `json:"duration"` // Total duration in seconds
+}
+
+// Waveform returns waveform peak data for visualization
+// GET /api/audio/:source_id/waveform?samples_per_sec=10
+func (h *AudioHandler) Waveform(c echo.Context) error {
+	ctx := c.Request().Context()
+	sourceID := c.Param("source_id")
+
+	// Parse samples_per_sec parameter (default 10)
+	samplesPerSec := 10.0
+	if sps := c.QueryParam("samples_per_sec"); sps != "" {
+		if v, err := strconv.ParseFloat(sps, 64); err == nil && v > 0 && v <= 100 {
+			samplesPerSec = v
+		}
+	}
+
+	// Get source
+	source, err := h.sourceRepo.GetByID(ctx, sourceID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if source == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "source not found"})
+	}
+
+	// Get metadata to find file path
+	if source.Metadata == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no metadata"})
+	}
+
+	var metadata struct {
+		Files    []string `json:"files"`
+		Duration float64  `json:"duration"`
+	}
+	if err := json.Unmarshal([]byte(*source.Metadata), &metadata); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to parse metadata"})
+	}
+
+	if len(metadata.Files) == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "no audio files"})
+	}
+
+	audioPath := metadata.Files[0]
+
+	// Check if WAV version exists
+	wavPath := audioPath
+	ext := filepath.Ext(audioPath)
+	if ext != ".wav" {
+		wavPath = audioPath[:len(audioPath)-len(ext)] + "_converted.wav"
+		if _, err := os.Stat(wavPath); os.IsNotExist(err) {
+			if err := asr.ConvertToWav(audioPath, wavPath); err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to convert audio"})
+			}
+		}
+	}
+
+	// Compute waveform peaks
+	peaks, duration, err := asr.ComputeWaveformPeaks(wavPath, samplesPerSec)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to compute waveform: " + err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, WaveformResponse{
+		Peaks:    peaks,
+		Duration: duration,
+	})
+}
+
 // Transcript returns the transcription artifact for a source
 // GET /api/audio/:source_id/transcript
 func (h *AudioHandler) Transcript(c echo.Context) error {
@@ -184,7 +256,7 @@ func (h *AudioHandler) Transcript(c echo.Context) error {
 }
 
 // TranscriptSyncPage renders the transcript sync page
-// GET /audio/:source_id/sync
+// GET /audio/:source_id/sync?interval=10&start=0&end=300&waveform=1
 func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 	ctx := c.Request().Context()
 	sourceID := c.Param("source_id")
@@ -196,6 +268,28 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 			intervalSec = v
 		}
 	}
+
+	// Parse range parameters (start/end in seconds)
+	// Default: show first 5 minutes
+	rangeStart := 0.0
+	rangeEnd := 300.0 // 5 minutes default
+	hasRangeParams := false
+
+	if startStr := c.QueryParam("start"); startStr != "" {
+		if v, err := strconv.ParseFloat(startStr, 64); err == nil && v >= 0 {
+			rangeStart = v
+			hasRangeParams = true
+		}
+	}
+	if endStr := c.QueryParam("end"); endStr != "" {
+		if v, err := strconv.ParseFloat(endStr, 64); err == nil && v > rangeStart {
+			rangeEnd = v
+			hasRangeParams = true
+		}
+	}
+
+	// Parse waveform display flag
+	showWaveform := c.QueryParam("waveform") == "1"
 
 	// Get source
 	source, err := h.sourceRepo.GetByID(ctx, sourceID)
@@ -255,8 +349,21 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 		totalDuration = float64(lastToken.StartTime + lastToken.Duration + 1.0)
 	}
 
+	// Adjust range based on total duration
+	if !hasRangeParams {
+		// If no range specified, show first 5 minutes or entire file if shorter
+		if totalDuration < rangeEnd {
+			rangeEnd = totalDuration
+		}
+	} else {
+		// Clamp to total duration
+		if rangeEnd > totalDuration {
+			rangeEnd = totalDuration
+		}
+	}
+
 	// Generate display segments for timeline view
-	displaySegments := asr.GenerateDisplaySegments(
+	allDisplaySegments := asr.GenerateDisplaySegments(
 		transcript.Tokens,
 		transcript.Segments,
 		totalDuration,
@@ -265,7 +372,30 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 		5.0,  // dotsPerSecond
 	)
 
-	return render(c, components.TranscriptSync(sourceID, title, filename, transcript, displaySegments))
+	// Filter display segments based on range
+	var displaySegments []asr.DisplaySegment
+	for _, ds := range allDisplaySegments {
+		// Include segment if it overlaps with the range
+		if ds.EndTime > rangeStart && ds.StartTime < rangeEnd {
+			displaySegments = append(displaySegments, ds)
+		}
+	}
+
+	// Build sync options for template
+	syncOpts := components.TranscriptSyncOptions{
+		SourceID:      sourceID,
+		Title:         title,
+		Filename:      filename,
+		Transcript:    transcript,
+		Segments:      displaySegments,
+		RangeStart:    rangeStart,
+		RangeEnd:      rangeEnd,
+		TotalDuration: totalDuration,
+		IntervalSec:   intervalSec,
+		ShowWaveform:  showWaveform,
+	}
+
+	return render(c, components.TranscriptSyncWithOptions(syncOpts))
 }
 
 // RetranscribeRequest represents the request body for partial re-transcription

@@ -186,6 +186,7 @@ func main() {
 	// Audio API
 	api.GET("/audio/:source_id/stream", audioHandler.Stream)
 	api.GET("/audio/:source_id/transcript", audioHandler.Transcript)
+	api.GET("/audio/:source_id/waveform", audioHandler.Waveform)
 	api.POST("/audio/:source_id/retranscribe", audioHandler.Retranscribe)
 	api.POST("/audio/:source_id/retranscribe-full", audioHandler.RetranscribeFull)
 

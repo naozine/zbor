@@ -6,7 +6,38 @@ import (
 	"zbor/web/layouts"
 )
 
+// TranscriptSyncOptions contains all options for the transcript sync page
+type TranscriptSyncOptions struct {
+	SourceID      string
+	Title         string
+	Filename      string
+	Transcript    *asr.Result
+	Segments      []asr.DisplaySegment
+	RangeStart    float64
+	RangeEnd      float64
+	TotalDuration float64
+	IntervalSec   float64
+	ShowWaveform  bool
+}
+
+// Helper function to format seconds as M:SS
+func formatTimeShort(seconds float64) string {
+	mins := int(seconds) / 60
+	secs := int(seconds) % 60
+	return fmt.Sprintf("%d:%02d", mins, secs)
+}
+
+// TranscriptSyncWithOptions renders the transcript sync page with full options
+templ TranscriptSyncWithOptions(opts TranscriptSyncOptions) {
+	@transcriptSyncContent(opts.SourceID, opts.Title, opts.Filename, opts.Transcript, opts.Segments, opts.RangeStart, opts.RangeEnd, opts.TotalDuration, opts.IntervalSec, opts.ShowWaveform)
+}
+
+// TranscriptSync is the legacy entry point (uses defaults)
 templ TranscriptSync(sourceID string, title string, filename string, transcript *asr.Result, displaySegments []asr.DisplaySegment) {
+	@transcriptSyncContent(sourceID, title, filename, transcript, displaySegments, 0, 300, 300, 10, false)
+}
+
+templ transcriptSyncContent(sourceID string, title string, filename string, transcript *asr.Result, displaySegments []asr.DisplaySegment, rangeStart float64, rangeEnd float64, totalDuration float64, intervalSec float64, showWaveform bool) {
 	@layouts.Base(title + " - Transcript Sync") {
 		<!-- Fixed Header with Controls -->
 		<div class="fixed top-0 left-0 right-0 z-50 bg-white shadow-md">
@@ -74,7 +105,7 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 				</div>
 
 				<!-- Display Options -->
-				<div class="px-4 sm:px-6 lg:px-8 py-2 bg-gray-100 flex items-center space-x-6 text-sm">
+				<div class="px-4 sm:px-6 lg:px-8 py-2 bg-gray-100 flex items-center flex-wrap gap-4 text-sm">
 					<div class="flex items-center space-x-2">
 						<label class="text-gray-600">Interval:</label>
 						<select id="interval-select" class="text-sm border-gray-300 rounded-md">
@@ -84,9 +115,41 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 							<option value="60">60s</option>
 						</select>
 					</div>
+					<!-- Range selector -->
+					<div class="flex items-center space-x-2">
+						<label class="text-gray-600">Range:</label>
+						<input
+							type="text"
+							id="range-start"
+							class="w-14 text-sm border-gray-300 rounded-md text-center"
+							placeholder="0:00"
+							value={ formatTimeShort(rangeStart) }
+						/>
+						<span class="text-gray-400">-</span>
+						<input
+							type="text"
+							id="range-end"
+							class="w-14 text-sm border-gray-300 rounded-md text-center"
+							placeholder="end"
+							value={ formatTimeShort(rangeEnd) }
+						/>
+						<span class="text-gray-400">/</span>
+						<span id="total-duration-display" class="text-gray-500">{ formatTimeShort(totalDuration) }</span>
+						<button id="range-apply" class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs">適用</button>
+						<button id="range-prev" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs" title="前へ">←</button>
+						<button id="range-next" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs" title="次へ">→</button>
+					</div>
 					<label class="flex items-center space-x-2 cursor-pointer">
 						<input type="checkbox" id="show-segments" class="rounded border-gray-300" checked/>
-						<span class="text-gray-600">Show segment info</span>
+						<span class="text-gray-600">Segments</span>
+					</label>
+					<label class="flex items-center space-x-2 cursor-pointer">
+						if showWaveform {
+							<input type="checkbox" id="show-waveform" class="rounded border-gray-300" checked/>
+						} else {
+							<input type="checkbox" id="show-waveform" class="rounded border-gray-300"/>
+						}
+						<span class="text-gray-600">Waveform</span>
 					</label>
 				</div>
 			</div>
@@ -106,7 +169,25 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 								data-seg-index={ fmt.Sprintf("%d", ds.Index) }
 								data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
 								data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+								data-interval={ fmt.Sprintf("%.2f", intervalSec) }
 							>
+								<!-- Waveform visualization (hidden by default) -->
+								<div class="waveform-container hidden mb-1">
+									<!-- Timeline ruler -->
+									<div class="waveform-ruler h-4 relative text-[10px] text-gray-400 select-none">
+										<!-- Ticks will be drawn by JavaScript -->
+									</div>
+									<!-- Waveform canvas -->
+									<canvas
+										class="waveform-canvas w-full h-8 cursor-pointer"
+										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+										data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+									></canvas>
+									<!-- Segment bar -->
+									<div class="segment-bar h-2 relative bg-gray-100 rounded-sm overflow-hidden">
+										<!-- Segments will be drawn by JavaScript -->
+									</div>
+								</div>
 								<!-- Main timeline row -->
 								<div class="flex hover:bg-gray-50 rounded py-1">
 									<span
@@ -400,9 +481,17 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			const timeLabels = document.querySelectorAll('.time-label');
 			const displaySegments = document.querySelectorAll('.display-segment');
 			const segmentInfos = document.querySelectorAll('.segment-info');
+			const waveformContainers = document.querySelectorAll('.waveform-container');
+			const showWaveformCheckbox = document.getElementById('show-waveform');
+			const rangeStartInput = document.getElementById('range-start');
+			const rangeEndInput = document.getElementById('range-end');
+			const rangeApplyBtn = document.getElementById('range-apply');
+			const rangePrevBtn = document.getElementById('range-prev');
+			const rangeNextBtn = document.getElementById('range-next');
 
 			let currentTokenIndex = -1;
 			let currentSegmentIndex = -1;
+			let waveformData = null; // Cached waveform data
 
 			// Format time as M:SS
 			function formatTime(seconds) {
@@ -431,6 +520,200 @@ templ TranscriptSync(sourceID string, title string, filename string, transcript 
 			}
 			showSegmentsCheckbox.addEventListener('change', updateSegmentInfoVisibility);
 			updateSegmentInfoVisibility();
+
+			// === Range Navigation ===
+			function parseTimeInput(str) {
+				// Parse M:SS or SS format
+				const parts = str.split(':');
+				if (parts.length === 2) {
+					return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+				}
+				return parseFloat(str) || 0;
+			}
+
+			function applyRange() {
+				const start = parseTimeInput(rangeStartInput.value);
+				const end = parseTimeInput(rangeEndInput.value);
+				const url = new URL(window.location.href);
+				url.searchParams.set('start', start.toString());
+				url.searchParams.set('end', end.toString());
+				window.location.href = url.toString();
+			}
+
+			function navigateRange(direction) {
+				const start = parseTimeInput(rangeStartInput.value);
+				const end = parseTimeInput(rangeEndInput.value);
+				const duration = end - start;
+				let newStart, newEnd;
+
+				if (direction === 'prev') {
+					newStart = Math.max(0, start - duration);
+					newEnd = newStart + duration;
+				} else {
+					newStart = start + duration;
+					newEnd = newStart + duration;
+				}
+
+				const url = new URL(window.location.href);
+				url.searchParams.set('start', newStart.toString());
+				url.searchParams.set('end', newEnd.toString());
+				window.location.href = url.toString();
+			}
+
+			rangeApplyBtn.addEventListener('click', applyRange);
+			rangePrevBtn.addEventListener('click', () => navigateRange('prev'));
+			rangeNextBtn.addEventListener('click', () => navigateRange('next'));
+
+			// === Waveform Display ===
+			async function fetchWaveformData() {
+				if (waveformData) return waveformData;
+				try {
+					const response = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=20`);
+					if (response.ok) {
+						waveformData = await response.json();
+					}
+				} catch (err) {
+					console.error('Failed to fetch waveform:', err);
+				}
+				return waveformData;
+			}
+
+			function drawWaveform(canvas, peaks, startTime, endTime, duration) {
+				const ctx = canvas.getContext('2d');
+				const width = canvas.offsetWidth;
+				const height = canvas.offsetHeight;
+
+				// Set canvas resolution
+				canvas.width = width * 2;
+				canvas.height = height * 2;
+				ctx.scale(2, 2);
+
+				// Clear
+				ctx.clearRect(0, 0, width, height);
+
+				// Calculate which peaks to draw
+				const samplesPerSec = peaks.length / duration;
+				const startIdx = Math.floor(startTime * samplesPerSec);
+				const endIdx = Math.ceil(endTime * samplesPerSec);
+				const peaksToShow = peaks.slice(startIdx, endIdx);
+
+				if (peaksToShow.length === 0) return;
+
+				const barWidth = width / peaksToShow.length;
+				const centerY = height / 2;
+
+				// Draw waveform bars
+				ctx.fillStyle = '#9CA3AF'; // gray-400
+				for (let i = 0; i < peaksToShow.length; i++) {
+					const peak = peaksToShow[i];
+					const barHeight = peak * height * 0.9;
+					const x = i * barWidth;
+					ctx.fillRect(x, centerY - barHeight / 2, Math.max(1, barWidth - 1), barHeight);
+				}
+			}
+
+			function drawRuler(container, startTime, endTime, intervalSec) {
+				const ruler = container.querySelector('.waveform-ruler');
+				ruler.innerHTML = '';
+
+				const width = container.offsetWidth;
+				const duration = endTime - startTime;
+
+				// Draw ticks every 2 seconds
+				const tickInterval = intervalSec <= 5 ? 1 : 2;
+				for (let t = Math.ceil(startTime / tickInterval) * tickInterval; t <= endTime; t += tickInterval) {
+					const x = ((t - startTime) / duration) * width;
+					const tick = document.createElement('div');
+					tick.className = 'absolute';
+					tick.style.left = `${x}px`;
+					tick.innerHTML = `<div class="h-2 border-l border-gray-300"></div><div class="text-[9px]">${formatTime(t)}</div>`;
+					ruler.appendChild(tick);
+				}
+			}
+
+			function drawSegmentBar(container, segments, startTime, endTime) {
+				const bar = container.querySelector('.segment-bar');
+				bar.innerHTML = '';
+
+				const width = container.offsetWidth;
+				const duration = endTime - startTime;
+
+				// Find segments that overlap with this time range
+				segments.forEach(seg => {
+					const segStart = Math.max(seg.start_time, startTime);
+					const segEnd = Math.min(seg.end_time, endTime);
+
+					if (segEnd > segStart) {
+						const left = ((segStart - startTime) / duration) * 100;
+						const w = ((segEnd - segStart) / duration) * 100;
+
+						const div = document.createElement('div');
+						div.className = 'absolute h-full bg-blue-400 opacity-60';
+						div.style.left = `${left}%`;
+						div.style.width = `${w}%`;
+						bar.appendChild(div);
+					}
+				});
+			}
+
+			async function updateWaveformDisplay() {
+				const show = showWaveformCheckbox.checked;
+
+				waveformContainers.forEach(container => {
+					container.classList.toggle('hidden', !show);
+				});
+
+				if (!show) return;
+
+				// Fetch waveform data
+				const data = await fetchWaveformData();
+				if (!data) return;
+
+				// Also fetch transcript data for segment bars
+				const transcriptData = await fetchTranscriptData();
+				const segments = transcriptData?.segments || [];
+
+				// Draw waveform for each display segment
+				displaySegments.forEach((seg, idx) => {
+					const container = seg.querySelector('.waveform-container');
+					const canvas = container.querySelector('.waveform-canvas');
+					const startTime = parseFloat(seg.dataset.start);
+					const endTime = parseFloat(seg.dataset.end);
+					const intervalSec = parseFloat(seg.dataset.interval) || 10;
+
+					drawWaveform(canvas, data.peaks, startTime, endTime, data.duration);
+					drawRuler(container, startTime, endTime, intervalSec);
+					drawSegmentBar(container, segments, startTime, endTime);
+				});
+
+				// Update URL to persist waveform state
+				const url = new URL(window.location.href);
+				url.searchParams.set('waveform', '1');
+				history.replaceState(null, '', url.toString());
+			}
+
+			// Waveform click to seek
+			document.querySelectorAll('.waveform-canvas').forEach(canvas => {
+				canvas.addEventListener('click', (e) => {
+					const rect = canvas.getBoundingClientRect();
+					const x = e.clientX - rect.left;
+					const ratio = x / rect.width;
+
+					const startTime = parseFloat(canvas.dataset.start);
+					const endTime = parseFloat(canvas.dataset.end);
+					const seekTime = startTime + (endTime - startTime) * ratio;
+
+					audio.currentTime = seekTime;
+					audio.play();
+				});
+			});
+
+			showWaveformCheckbox.addEventListener('change', updateWaveformDisplay);
+
+			// Initialize waveform if checked
+			if (showWaveformCheckbox.checked) {
+				updateWaveformDisplay();
+			}
 
 			// Highlight current token and segment based on audio time
 			function updateHighlight() {
