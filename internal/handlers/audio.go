@@ -261,8 +261,8 @@ func (h *AudioHandler) TranscriptSyncPage(c echo.Context) error {
 	ctx := c.Request().Context()
 	sourceID := c.Param("source_id")
 
-	// Parse interval parameter (default 10 seconds)
-	intervalSec := 10.0
+	// Parse interval parameter (default 3 seconds)
+	intervalSec := 3.0
 	if intervalStr := c.QueryParam("interval"); intervalStr != "" {
 		if v, err := strconv.ParseFloat(intervalStr, 64); err == nil && v > 0 {
 			intervalSec = v

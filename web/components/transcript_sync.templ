@@ -109,10 +109,9 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 					<div class="flex items-center space-x-2">
 						<label class="text-gray-600">Interval:</label>
 						<select id="interval-select" class="text-sm border-gray-300 rounded-md">
+							<option value="3" selected>3s</option>
 							<option value="5">5s</option>
-							<option value="10" selected>10s</option>
-							<option value="30">30s</option>
-							<option value="60">60s</option>
+							<option value="10">10s</option>
 						</select>
 					</div>
 					<!-- Range selector -->
@@ -172,9 +171,11 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 								data-interval={ fmt.Sprintf("%.2f", intervalSec) }
 							>
 								<!-- Waveform visualization (hidden by default) -->
-								<div class="waveform-container hidden mb-1">
+								<div class="waveform-container hidden mb-2 relative border border-gray-200 rounded bg-gray-50">
+									<!-- Playhead indicator (red vertical line) -->
+									<div class="playhead absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none hidden" style="left: 0%"></div>
 									<!-- Timeline ruler -->
-									<div class="waveform-ruler h-4 relative text-[10px] text-gray-400 select-none">
+									<div class="waveform-ruler h-4 relative text-[10px] text-gray-400 select-none border-b border-gray-200">
 										<!-- Ticks will be drawn by JavaScript -->
 									</div>
 									<!-- Waveform canvas -->
@@ -183,13 +184,38 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
 										data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
 									></canvas>
-									<!-- Segment bar -->
-									<div class="segment-bar h-2 relative bg-gray-100 rounded-sm overflow-hidden">
-										<!-- Segments will be drawn by JavaScript -->
+									<!-- Text layer (time-aligned tokens) -->
+									<div class="text-layer h-5 relative overflow-hidden border-t border-gray-200">
+										for _, elem := range ds.Elements {
+											if elem.Type == "text" {
+												<span
+													class="token-aligned absolute text-xs cursor-pointer hover:bg-blue-100 rounded truncate"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+													data-duration={ fmt.Sprintf("%.3f", elem.Duration) }
+													data-row-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+													data-row-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+												>{ elem.Text }</span>
+											}
+										}
+									</div>
+									<!-- Segment layer (time-aligned bars with labels) -->
+									<div class="segment-layer h-4 relative overflow-hidden border-t border-gray-100 bg-gray-100">
+										for _, asrSeg := range ds.ASRSegments {
+											<div
+												class="segment-aligned absolute h-full bg-blue-200 border border-blue-300 rounded-sm flex items-center justify-center cursor-pointer hover:bg-blue-300 text-[9px] text-blue-700 font-medium truncate"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												data-start={ fmt.Sprintf("%.2f", asrSeg.StartTime) }
+												data-end={ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+												data-row-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+												data-row-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+											>
+												seg{ fmt.Sprintf("%d", asrSeg.Index) }
+											</div>
+										}
 									</div>
 								</div>
-								<!-- Main timeline row -->
-								<div class="flex hover:bg-gray-50 rounded py-1">
+								<!-- Compact text row (shown when waveform is hidden) -->
+								<div class="compact-text-row flex hover:bg-gray-50 rounded py-1">
 									<span
 										class="time-label text-gray-400 mr-3 whitespace-nowrap cursor-pointer hover:text-blue-600"
 										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
@@ -631,27 +657,65 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				}
 			}
 
-			function drawSegmentBar(container, segments, startTime, endTime) {
-				const bar = container.querySelector('.segment-bar');
-				bar.innerHTML = '';
-
-				const width = container.offsetWidth;
+			// Position time-aligned tokens
+			function positionTimeAlignedElements(container, startTime, endTime) {
 				const duration = endTime - startTime;
 
-				// Find segments that overlap with this time range
-				segments.forEach(seg => {
-					const segStart = Math.max(seg.start_time, startTime);
-					const segEnd = Math.min(seg.end_time, endTime);
+				// Position tokens
+				container.querySelectorAll('.token-aligned').forEach(token => {
+					const tokenStart = parseFloat(token.dataset.start);
+					const tokenDuration = parseFloat(token.dataset.duration) || 0.1;
+					const rowStart = parseFloat(token.dataset.rowStart);
+					const rowEnd = parseFloat(token.dataset.rowEnd);
 
-					if (segEnd > segStart) {
-						const left = ((segStart - startTime) / duration) * 100;
-						const w = ((segEnd - segStart) / duration) * 100;
+					// Calculate position as percentage
+					const left = ((tokenStart - rowStart) / (rowEnd - rowStart)) * 100;
+					const width = (tokenDuration / (rowEnd - rowStart)) * 100;
 
-						const div = document.createElement('div');
-						div.className = 'absolute h-full bg-blue-400 opacity-60';
-						div.style.left = `${left}%`;
-						div.style.width = `${w}%`;
-						bar.appendChild(div);
+					token.style.left = `${Math.max(0, left)}%`;
+					token.style.width = `${Math.min(width, 100 - left)}%`;
+					token.style.minWidth = '0';
+				});
+
+				// Position segments (already have data attributes)
+				container.querySelectorAll('.segment-aligned').forEach(seg => {
+					const segStart = parseFloat(seg.dataset.start);
+					const segEnd = parseFloat(seg.dataset.end);
+					const rowStart = parseFloat(seg.dataset.rowStart);
+					const rowEnd = parseFloat(seg.dataset.rowEnd);
+
+					// Clamp to row boundaries
+					const clampedStart = Math.max(segStart, rowStart);
+					const clampedEnd = Math.min(segEnd, rowEnd);
+
+					if (clampedEnd > clampedStart) {
+						const left = ((clampedStart - rowStart) / (rowEnd - rowStart)) * 100;
+						const width = ((clampedEnd - clampedStart) / (rowEnd - rowStart)) * 100;
+
+						seg.style.left = `${left}%`;
+						seg.style.width = `${width}%`;
+					} else {
+						seg.style.display = 'none';
+					}
+				});
+			}
+
+			// Update playhead position for all visible containers
+			function updatePlayheads(currentTime) {
+				displaySegments.forEach(seg => {
+					const container = seg.querySelector('.waveform-container');
+					if (container.classList.contains('hidden')) return;
+
+					const playhead = container.querySelector('.playhead');
+					const startTime = parseFloat(seg.dataset.start);
+					const endTime = parseFloat(seg.dataset.end);
+
+					if (currentTime >= startTime && currentTime <= endTime) {
+						const left = ((currentTime - startTime) / (endTime - startTime)) * 100;
+						playhead.style.left = `${left}%`;
+						playhead.classList.remove('hidden');
+					} else {
+						playhead.classList.add('hidden');
 					}
 				});
 			}
@@ -659,19 +723,25 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			async function updateWaveformDisplay() {
 				const show = showWaveformCheckbox.checked;
 
+				// Toggle visibility of waveform containers and compact text rows
 				waveformContainers.forEach(container => {
 					container.classList.toggle('hidden', !show);
 				});
+				document.querySelectorAll('.compact-text-row').forEach(row => {
+					row.classList.toggle('hidden', show);
+				});
 
-				if (!show) return;
+				if (!show) {
+					// Remove waveform param from URL
+					const url = new URL(window.location.href);
+					url.searchParams.delete('waveform');
+					history.replaceState(null, '', url.toString());
+					return;
+				}
 
 				// Fetch waveform data
 				const data = await fetchWaveformData();
 				if (!data) return;
-
-				// Also fetch transcript data for segment bars
-				const transcriptData = await fetchTranscriptData();
-				const segments = transcriptData?.segments || [];
 
 				// Draw waveform for each display segment
 				displaySegments.forEach((seg, idx) => {
@@ -679,12 +749,15 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 					const canvas = container.querySelector('.waveform-canvas');
 					const startTime = parseFloat(seg.dataset.start);
 					const endTime = parseFloat(seg.dataset.end);
-					const intervalSec = parseFloat(seg.dataset.interval) || 10;
+					const intervalSec = parseFloat(seg.dataset.interval) || 3;
 
 					drawWaveform(canvas, data.peaks, startTime, endTime, data.duration);
 					drawRuler(container, startTime, endTime, intervalSec);
-					drawSegmentBar(container, segments, startTime, endTime);
+					positionTimeAlignedElements(container, startTime, endTime);
 				});
+
+				// Update playhead to current position
+				updatePlayheads(audio.currentTime);
 
 				// Update URL to persist waveform state
 				const url = new URL(window.location.href);
@@ -781,6 +854,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				currentTimeEl.textContent = formatTime(audio.currentTime);
 				seekBar.value = (audio.currentTime / audio.duration) * 100 || 0;
 				updateHighlight();
+				updatePlayheads(audio.currentTime);
 			});
 
 			audio.addEventListener('loadedmetadata', () => {
