@@ -17,34 +17,77 @@ func ComputeWaveformPeaks(wavPath string, samplesPerSec float64) ([]float64, flo
 	}
 	defer f.Close()
 
-	// Read WAV header
-	header := make([]byte, 44)
-	if _, err := io.ReadFull(f, header); err != nil {
-		return nil, 0, fmt.Errorf("failed to read WAV header: %w", err)
+	// Read and validate RIFF header (12 bytes)
+	riffHeader := make([]byte, 12)
+	if _, err := io.ReadFull(f, riffHeader); err != nil {
+		return nil, 0, fmt.Errorf("failed to read RIFF header: %w", err)
 	}
 
-	// Validate RIFF header
-	if string(header[0:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
+	if string(riffHeader[0:4]) != "RIFF" || string(riffHeader[8:12]) != "WAVE" {
 		return nil, 0, fmt.Errorf("not a valid WAV file")
 	}
 
-	// Parse format chunk
-	// Note: This assumes standard WAV format. For more complex files, we'd need to search for chunks.
-	numChannels := int(binary.LittleEndian.Uint16(header[22:24]))
-	sampleRate := int(binary.LittleEndian.Uint32(header[24:28]))
-	bitsPerSample := int(binary.LittleEndian.Uint16(header[34:36]))
+	// Parse chunks to find fmt and data
+	var numChannels, sampleRate, bitsPerSample int
+	var dataSize int64
+	var foundFmt, foundData bool
+
+	for !foundData {
+		// Read chunk header (8 bytes: 4 bytes ID + 4 bytes size)
+		chunkHeader := make([]byte, 8)
+		if _, err := io.ReadFull(f, chunkHeader); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, 0, fmt.Errorf("failed to read chunk header: %w", err)
+		}
+
+		chunkID := string(chunkHeader[0:4])
+		chunkSize := int64(binary.LittleEndian.Uint32(chunkHeader[4:8]))
+
+		switch chunkID {
+		case "fmt ":
+			// Read format chunk
+			fmtData := make([]byte, chunkSize)
+			if _, err := io.ReadFull(f, fmtData); err != nil {
+				return nil, 0, fmt.Errorf("failed to read fmt chunk: %w", err)
+			}
+			if len(fmtData) >= 16 {
+				numChannels = int(binary.LittleEndian.Uint16(fmtData[2:4]))
+				sampleRate = int(binary.LittleEndian.Uint32(fmtData[4:8]))
+				bitsPerSample = int(binary.LittleEndian.Uint16(fmtData[14:16]))
+			}
+			foundFmt = true
+
+		case "data":
+			dataSize = chunkSize
+			foundData = true
+			// Don't read the data here, we'll stream it below
+
+		default:
+			// Skip unknown chunks (LIST, INFO, etc.)
+			if _, err := f.Seek(chunkSize, io.SeekCurrent); err != nil {
+				return nil, 0, fmt.Errorf("failed to skip chunk %s: %w", chunkID, err)
+			}
+		}
+
+		// WAV chunks are word-aligned (padded to even byte boundary)
+		if chunkSize%2 != 0 && chunkID != "data" {
+			f.Seek(1, io.SeekCurrent)
+		}
+	}
+
+	if !foundFmt {
+		return nil, 0, fmt.Errorf("fmt chunk not found")
+	}
+	if !foundData {
+		return nil, 0, fmt.Errorf("data chunk not found")
+	}
 
 	if bitsPerSample != 16 {
 		return nil, 0, fmt.Errorf("only 16-bit WAV files are supported, got %d-bit", bitsPerSample)
 	}
 
-	// Get file size to calculate duration
-	fileInfo, err := f.Stat()
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get file info: %w", err)
-	}
-
-	dataSize := fileInfo.Size() - 44 // Subtract header size
 	bytesPerSample := bitsPerSample / 8
 	totalSamples := int(dataSize) / (bytesPerSample * numChannels)
 	duration := float64(totalSamples) / float64(sampleRate)

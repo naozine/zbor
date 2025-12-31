@@ -86,6 +86,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 							</div>
 							<div class="flex justify-between text-xs text-gray-500 mt-1">
 								<span id="current-time">0:00</span>
+								<span id="seek-debug" class="text-blue-500 font-mono hidden"></span>
 								<span id="total-time">0:00</span>
 							</div>
 						</div>
@@ -594,7 +595,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			async function fetchWaveformData() {
 				if (waveformData) return waveformData;
 				try {
-					const response = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=20`);
+					const response = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=50`);
 					if (response.ok) {
 						waveformData = await response.json();
 					}
@@ -776,7 +777,21 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 					const endTime = parseFloat(canvas.dataset.end);
 					const seekTime = startTime + (endTime - startTime) * ratio;
 
+					console.log(`[Waveform Click] x=${x.toFixed(1)}px, ratio=${ratio.toFixed(4)}, seekTime=${seekTime.toFixed(6)}s`);
+
+					const seekDebug = document.getElementById('seek-debug');
+					seekDebug.textContent = `seek: ${seekTime.toFixed(3)}s`;
+					seekDebug.classList.remove('hidden');
+
 					audio.currentTime = seekTime;
+
+					// Show actual position after seek
+					setTimeout(() => {
+						const diff = (audio.currentTime - seekTime) * 1000;
+						console.log(`[After Seek] requested=${seekTime.toFixed(6)}s, actual=${audio.currentTime.toFixed(6)}s, diff=${diff.toFixed(3)}ms`);
+						seekDebug.textContent = `seek: ${seekTime.toFixed(3)}s → actual: ${audio.currentTime.toFixed(3)}s (${diff >= 0 ? '+' : ''}${diff.toFixed(1)}ms)`;
+					}, 10);
+
 					audio.play();
 				});
 			});
