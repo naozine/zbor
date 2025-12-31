@@ -405,6 +405,61 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 							<span class="text-sm">処理中...</span>
 						</div>
 					</div>
+					<!-- Boundary Adjustment Options -->
+					<div class="mt-3 pt-3 border-t border-gray-200">
+						<div class="flex items-start space-x-4">
+							<label class="flex items-center space-x-2 cursor-pointer">
+								<input type="checkbox" id="modal-auto-adjust" class="rounded border-gray-300 text-blue-500 focus:ring-blue-500"/>
+								<span class="text-sm text-gray-700">波形に基づいて境界を自動調整</span>
+							</label>
+							<div id="boundary-params" class="hidden flex items-center space-x-4 text-sm">
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">閾値:</label>
+									<select id="modal-boundary-threshold" class="text-xs border-gray-300 rounded py-1">
+										<option value="0.01">0.01</option>
+										<option value="0.02">0.02</option>
+										<option value="0.03" selected>0.03</option>
+										<option value="0.05">0.05</option>
+										<option value="0.08">0.08</option>
+										<option value="0.10">0.10</option>
+									</select>
+								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">マージ間隔:</label>
+									<select id="modal-boundary-merge" class="text-xs border-gray-300 rounded py-1">
+										<option value="100">100ms</option>
+										<option value="200">200ms</option>
+										<option value="300" selected>300ms</option>
+										<option value="400">400ms</option>
+										<option value="500">500ms</option>
+									</select>
+								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">検索範囲:</label>
+									<select id="modal-boundary-search" class="text-xs border-gray-300 rounded py-1">
+										<option value="500">500ms</option>
+										<option value="750">750ms</option>
+										<option value="1000" selected>1000ms</option>
+										<option value="1500">1500ms</option>
+										<option value="2000">2000ms</option>
+									</select>
+								</div>
+							</div>
+						</div>
+						<!-- Boundary Adjustment Result -->
+						<div id="boundary-result" class="hidden mt-2 p-2 bg-blue-50 rounded-md text-sm">
+							<div class="flex items-center space-x-4">
+								<span class="text-gray-600">時間範囲:</span>
+								<span class="font-mono">
+									<span id="boundary-original-range" class="text-gray-500"></span>
+									<span class="mx-2">→</span>
+									<span id="boundary-adjusted-range" class="text-blue-700 font-medium"></span>
+								</span>
+								<span id="boundary-diff" class="text-xs text-blue-600"></span>
+							</div>
+							<div id="boundary-clusters" class="mt-1 text-xs text-gray-600"></div>
+						</div>
+					</div>
 				</div>
 
 				<!-- Whisper Align Info (hidden by default, shown for whisper:align) -->
@@ -1187,9 +1242,30 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			const modalAlignInfo = document.getElementById('modal-align-info');
 			const modalWhisperRaw = document.getElementById('modal-whisper-raw');
 			const modalAlignmentDiff = document.getElementById('modal-alignment-diff');
+			// Boundary adjustment elements
+			const modalAutoAdjust = document.getElementById('modal-auto-adjust');
+			const boundaryParams = document.getElementById('boundary-params');
+			const boundaryThreshold = document.getElementById('modal-boundary-threshold');
+			const boundaryMerge = document.getElementById('modal-boundary-merge');
+			const boundarySearch = document.getElementById('modal-boundary-search');
+			const boundaryResult = document.getElementById('boundary-result');
+			const boundaryOriginalRange = document.getElementById('boundary-original-range');
+			const boundaryAdjustedRange = document.getElementById('boundary-adjusted-range');
+			const boundaryDiff = document.getElementById('boundary-diff');
+			const boundaryClusters = document.getElementById('boundary-clusters');
 
 			let currentPreviewResult = null; // Store preview result for apply
 			let currentDebugInfo = null; // Store full debug info for copy
+
+			// Toggle boundary params visibility
+			modalAutoAdjust.addEventListener('change', () => {
+				if (modalAutoAdjust.checked) {
+					boundaryParams.classList.remove('hidden');
+				} else {
+					boundaryParams.classList.add('hidden');
+					boundaryResult.classList.add('hidden');
+				}
+			});
 
 			// Format time as MM:SS.mm
 			function formatTimeMs(seconds) {
@@ -1310,6 +1386,9 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				currentDebugInfo = null;
 				updateAlignInfoVisibility(false);
 
+				// Reset boundary adjustment UI
+				boundaryResult.classList.add('hidden');
+
 				// Show modal
 				retranscribeModal.classList.remove('hidden');
 			}
@@ -1359,16 +1438,26 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">処理中...</div>';
 
 				try {
+					const requestBody = {
+						segment_start: segmentStart,
+						segment_end: segmentEnd,
+						tempo: tempo,
+						model: model,
+						preview: true
+					};
+
+					// Add boundary adjustment params if enabled
+					if (modalAutoAdjust.checked) {
+						requestBody.auto_adjust_boundary = true;
+						requestBody.boundary_threshold = parseFloat(boundaryThreshold.value);
+						requestBody.boundary_merge_gap_ms = parseInt(boundaryMerge.value);
+						requestBody.boundary_search_ms = parseInt(boundarySearch.value);
+					}
+
 					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							segment_start: segmentStart,
-							segment_end: segmentEnd,
-							tempo: tempo,
-							model: model,
-							preview: true
-						})
+						body: JSON.stringify(requestBody)
 					});
 
 					const result = await response.json();
@@ -1378,7 +1467,11 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 							segment_start: segmentStart,
 							segment_end: segmentEnd,
 							tempo: tempo,
-							model: model
+							model: model,
+							auto_adjust_boundary: modalAutoAdjust.checked,
+							boundary_threshold: parseFloat(boundaryThreshold.value),
+							boundary_merge_gap_ms: parseInt(boundaryMerge.value),
+							boundary_search_ms: parseInt(boundarySearch.value)
 						};
 
 						// Store full debug info
@@ -1403,12 +1496,44 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 						} else {
 							updateAlignInfoVisibility(false);
 						}
+
+						// Show boundary adjustment info if available
+						if (result.boundary_adjustment) {
+							const ba = result.boundary_adjustment;
+							boundaryOriginalRange.textContent = `${formatTimeMs(ba.original_start)} - ${formatTimeMs(ba.original_end)}`;
+							boundaryAdjustedRange.textContent = `${formatTimeMs(ba.adjusted_start)} - ${formatTimeMs(ba.adjusted_end)}`;
+
+							const diffParts = [];
+							if (ba.start_extended_ms !== 0) {
+								diffParts.push(`開始: ${ba.start_extended_ms > 0 ? '-' : '+'}${Math.abs(ba.start_extended_ms)}ms`);
+							}
+							if (ba.end_extended_ms !== 0) {
+								diffParts.push(`終了: ${ba.end_extended_ms > 0 ? '+' : '-'}${Math.abs(ba.end_extended_ms)}ms`);
+							}
+							boundaryDiff.textContent = diffParts.length > 0 ? `(${diffParts.join(', ')})` : '';
+
+							// Display merged clusters
+							if (ba.merged_clusters && ba.merged_clusters.length > 0) {
+								const clusterInfo = ba.merged_clusters.map((c, i) => {
+									const duration = ((c.end_time - c.start_time) * 1000).toFixed(0);
+									return `${formatTimeMs(c.start_time)}-${formatTimeMs(c.end_time)} (${duration}ms)`;
+								}).join(' | ');
+								boundaryClusters.textContent = `検出クラスタ: ${clusterInfo}`;
+							} else {
+								boundaryClusters.textContent = '';
+							}
+
+							boundaryResult.classList.remove('hidden');
+						} else {
+							boundaryResult.classList.add('hidden');
+						}
 					} else {
 						modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${result.error || '再文字起こしに失敗しました'}</div>`;
 						modalApplyBtn.disabled = true;
 						modalCopyDebugBtn.classList.add('hidden');
 						currentDebugInfo = null;
 						updateAlignInfoVisibility(false);
+						boundaryResult.classList.add('hidden');
 					}
 				} catch (err) {
 					modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${err.message}</div>`;
@@ -1430,16 +1555,26 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				modalApplyBtn.textContent = '適用中...';
 
 				try {
+					const requestBody = {
+						segment_start: currentPreviewResult.segment_start,
+						segment_end: currentPreviewResult.segment_end,
+						tempo: currentPreviewResult.tempo,
+						model: currentPreviewResult.model,
+						preview: false
+					};
+
+					// Include boundary adjustment params if they were used
+					if (currentPreviewResult.auto_adjust_boundary) {
+						requestBody.auto_adjust_boundary = true;
+						requestBody.boundary_threshold = currentPreviewResult.boundary_threshold;
+						requestBody.boundary_merge_gap_ms = currentPreviewResult.boundary_merge_gap_ms;
+						requestBody.boundary_search_ms = currentPreviewResult.boundary_search_ms;
+					}
+
 					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							segment_start: currentPreviewResult.segment_start,
-							segment_end: currentPreviewResult.segment_end,
-							tempo: currentPreviewResult.tempo,
-							model: currentPreviewResult.model,
-							preview: false
-						})
+						body: JSON.stringify(requestBody)
 					});
 
 					const result = await response.json();

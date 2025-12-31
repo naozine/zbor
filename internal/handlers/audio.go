@@ -405,6 +405,12 @@ type RetranscribeRequest struct {
 	Tempo        float64 `json:"tempo"`         // Audio tempo (0.85-1.0)
 	Model        string  `json:"model"`         // "reazonspeech", "sensevoice", or "whisper"
 	Preview      bool    `json:"preview"`       // If true, return result without saving
+
+	// Boundary adjustment parameters
+	AutoAdjustBoundary bool    `json:"auto_adjust_boundary"` // Enable waveform-based boundary adjustment
+	BoundaryThreshold  float64 `json:"boundary_threshold"`   // Audio detection threshold (0.01-0.10, default 0.03)
+	BoundaryMergeGapMs int     `json:"boundary_merge_gap_ms"` // Merge gap in ms (100-500, default 300)
+	BoundarySearchMs   int     `json:"boundary_search_ms"`   // Search window in ms (500-2000, default 1000)
 }
 
 // RetranscribeResponse represents the response for preview mode
@@ -420,6 +426,26 @@ type RetranscribeResponse struct {
 	WhisperRawText  string                    `json:"whisper_raw_text,omitempty"`
 	AlignmentDiff   []AlignmentDiffItem       `json:"alignment_diff,omitempty"`
 	OriginalText    string                    `json:"original_text,omitempty"`
+	// Boundary adjustment fields
+	BoundaryAdjustment *BoundaryAdjustmentInfo `json:"boundary_adjustment,omitempty"`
+}
+
+// BoundaryAdjustmentInfo contains boundary adjustment result
+type BoundaryAdjustmentInfo struct {
+	OriginalStart   float64            `json:"original_start"`
+	OriginalEnd     float64            `json:"original_end"`
+	AdjustedStart   float64            `json:"adjusted_start"`
+	AdjustedEnd     float64            `json:"adjusted_end"`
+	StartExtendedMs int                `json:"start_extended_ms"`
+	EndExtendedMs   int                `json:"end_extended_ms"`
+	MergedClusters  []AudioClusterInfo `json:"merged_clusters,omitempty"`
+}
+
+// AudioClusterInfo contains audio cluster info for display
+type AudioClusterInfo struct {
+	StartTime float64 `json:"start_time"`
+	EndTime   float64 `json:"end_time"`
+	MaxPeak   float64 `json:"max_peak"`
 }
 
 // AlignmentDiffItem represents a single character in the alignment diff
@@ -524,6 +550,63 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	// Get time range from segments
 	startTime := transcript.Segments[req.SegmentStart].StartTime
 	endTime := transcript.Segments[req.SegmentEnd].EndTime
+
+	// Boundary adjustment
+	var boundaryInfo *BoundaryAdjustmentInfo
+	if req.AutoAdjustBoundary {
+		// Get WAV path for waveform analysis
+		wavPath := audioPath
+		ext := filepath.Ext(audioPath)
+		if ext != ".wav" {
+			wavPath = audioPath[:len(audioPath)-len(ext)] + "_converted.wav"
+		}
+
+		// Compute waveform peaks
+		peaks, duration, err := asr.ComputeWaveformPeaks(wavPath, 50) // 50 samples/sec
+		if err == nil && duration > 0 {
+			// Set default params if not specified
+			params := asr.BoundaryAdjustmentParams{
+				Threshold:    req.BoundaryThreshold,
+				MergeGapMs:   req.BoundaryMergeGapMs,
+				SearchWindow: req.BoundarySearchMs,
+			}
+			if params.Threshold <= 0 || params.Threshold > 0.1 {
+				params.Threshold = 0.03
+			}
+			if params.MergeGapMs <= 0 || params.MergeGapMs > 500 {
+				params.MergeGapMs = 300
+			}
+			if params.SearchWindow <= 0 || params.SearchWindow > 2000 {
+				params.SearchWindow = 1000
+			}
+
+			// Adjust boundaries
+			result := asr.AdjustBoundaries(peaks, 50, startTime, endTime, params)
+
+			// Update time range
+			startTime = result.AdjustedStart
+			endTime = result.AdjustedEnd
+
+			// Build response info
+			var clusters []AudioClusterInfo
+			for _, c := range result.MergedClusters {
+				clusters = append(clusters, AudioClusterInfo{
+					StartTime: c.StartTime,
+					EndTime:   c.EndTime,
+					MaxPeak:   c.MaxPeak,
+				})
+			}
+			boundaryInfo = &BoundaryAdjustmentInfo{
+				OriginalStart:   result.OriginalStart,
+				OriginalEnd:     result.OriginalEnd,
+				AdjustedStart:   result.AdjustedStart,
+				AdjustedEnd:     result.AdjustedEnd,
+				StartExtendedMs: result.StartExtendedMs,
+				EndExtendedMs:   result.EndExtendedMs,
+				MergedClusters:  clusters,
+			}
+		}
+	}
 
 	// Default to reazonspeech if not specified
 	model := req.Model
@@ -677,11 +760,12 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	// If preview mode, return without saving
 	if req.Preview {
 		response := RetranscribeResponse{
-			Success:          true,
-			OriginalSegments: originalSegments,
-			NewSegments:      newSegments,
-			Model:            model,
-			Tempo:            req.Tempo,
+			Success:            true,
+			OriginalSegments:   originalSegments,
+			NewSegments:        newSegments,
+			Model:              model,
+			Tempo:              req.Tempo,
+			BoundaryAdjustment: boundaryInfo,
 		}
 
 		// Add Whisper Align specific fields if available
@@ -720,12 +804,13 @@ func (h *AudioHandler) Retranscribe(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, RetranscribeResponse{
-		Success:          true,
-		Message:          "Retranscription completed",
-		OriginalSegments: originalSegments,
-		NewSegments:      newSegments,
-		Model:            model,
-		Tempo:            req.Tempo,
+		Success:            true,
+		Message:            "Retranscription completed",
+		OriginalSegments:   originalSegments,
+		NewSegments:        newSegments,
+		Model:              model,
+		Tempo:              req.Tempo,
+		BoundaryAdjustment: boundaryInfo,
 	})
 }
 
