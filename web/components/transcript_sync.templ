@@ -161,6 +161,30 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 		<!-- Transcript Content -->
 		<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
 			<div class="bg-white shadow rounded-lg">
+				<!-- Grouping Controls Header -->
+				<div class="px-6 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+					<label class="flex items-center space-x-2 cursor-pointer">
+						<input type="checkbox" id="enable-grouping" class="rounded border-gray-300 text-blue-600"/>
+						<span class="text-sm text-gray-700">隣接セグメントをグループ化</span>
+					</label>
+					<div id="grouping-options" class="hidden flex items-center space-x-4 text-sm">
+						<div class="flex items-center space-x-2">
+							<label class="text-gray-600">閾値:</label>
+							<select id="grouping-threshold" class="text-sm border-gray-300 rounded py-1 px-2">
+								<option value="200">200ms</option>
+								<option value="300">300ms</option>
+								<option value="500" selected>500ms</option>
+								<option value="750">750ms</option>
+								<option value="1000">1秒</option>
+								<option value="1500">1.5秒</option>
+								<option value="2000">2秒</option>
+								<option value="3000">3秒</option>
+								<option value="5000">5秒</option>
+							</select>
+						</div>
+						<span id="group-count" class="text-gray-500">グループ数: -</span>
+					</div>
+				</div>
 				<div class="px-6 py-6">
 					<div id="transcript" class="space-y-2 font-mono text-sm">
 						for _, ds := range displaySegments {
@@ -283,37 +307,12 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 						<span id="selection-info" class="text-sm font-medium text-blue-600">-</span>
 						<button id="clear-selection" class="text-sm text-gray-500 hover:text-gray-700">クリア</button>
 					</div>
-					<div class="flex items-center space-x-4">
-						<div class="flex items-center space-x-2">
-							<label class="text-sm text-gray-600">Model:</label>
-							<select id="retranscribe-model" class="text-sm border-gray-300 rounded-md">
-								<option value="reazonspeech" selected>ReazonSpeech</option>
-								<option value="sensevoice">SenseVoice</option>
-								<option value="whisper">Whisper</option>
-								<option value="whisper:align">Whisper (Align)</option>
-							</select>
-						</div>
-						<div class="flex items-center space-x-2">
-							<label class="text-sm text-gray-600">Tempo:</label>
-							<select id="retranscribe-tempo" class="text-sm border-gray-300 rounded-md">
-								<option value="0.5">0.5x (超低速)</option>
-								<option value="0.6">0.6x</option>
-								<option value="0.7">0.7x</option>
-								<option value="0.75">0.75x</option>
-								<option value="0.8">0.8x</option>
-								<option value="0.85" selected>0.85x</option>
-								<option value="0.9">0.9x</option>
-								<option value="0.95">0.95x</option>
-								<option value="1.0">1.0x (通常)</option>
-							</select>
-						</div>
-						<button
-							id="retranscribe-btn"
-							class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
-						>
-							再文字起こし
-						</button>
-					</div>
+					<button
+						id="retranscribe-btn"
+						class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+					>
+						再文字起こし
+					</button>
 				</div>
 			</div>
 		</div>
@@ -1118,10 +1117,168 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			const selectionInfo = document.getElementById('selection-info');
 			const clearSelectionBtn = document.getElementById('clear-selection');
 			const retranscribeBtn = document.getElementById('retranscribe-btn');
-			const retranscribeTempo = document.getElementById('retranscribe-tempo');
 			const processingOverlay = document.getElementById('processing-overlay');
+			// Grouping elements
+			const enableGroupingCheckbox = document.getElementById('enable-grouping');
+			const groupingOptions = document.getElementById('grouping-options');
+			const groupingThresholdSelect = document.getElementById('grouping-threshold');
+			const groupCountSpan = document.getElementById('group-count');
 
 			let selectedSegments = new Set();
+			let segmentGroups = []; // Array of arrays, each containing segment indices
+			let segmentToGroup = {}; // Map from segment index to group index
+			let groupingEnabled = false;
+
+			// === Grouping Logic ===
+			function buildSegmentGroups() {
+				// Build segment data from DOM
+				const segmentData = [];
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (!segmentData.find(s => s.idx === idx)) {
+						segmentData.push({
+							idx: idx,
+							start: parseFloat(seg.dataset.start),
+							end: parseFloat(seg.dataset.end)
+						});
+					}
+				});
+				segmentData.sort((a, b) => a.idx - b.idx);
+
+				if (segmentData.length === 0) {
+					segmentGroups = [];
+					segmentToGroup = {};
+					return;
+				}
+
+				const thresholdMs = parseInt(groupingThresholdSelect.value);
+				const thresholdSec = thresholdMs / 1000;
+
+				segmentGroups = [];
+				segmentToGroup = {};
+				let currentGroup = [segmentData[0].idx];
+
+				for (let i = 1; i < segmentData.length; i++) {
+					const prev = segmentData[i - 1];
+					const curr = segmentData[i];
+					const gap = curr.start - prev.end;
+
+					if (gap <= thresholdSec) {
+						currentGroup.push(curr.idx);
+					} else {
+						segmentGroups.push(currentGroup);
+						currentGroup = [curr.idx];
+					}
+				}
+				segmentGroups.push(currentGroup);
+
+				// Build reverse map
+				segmentGroups.forEach((group, groupIdx) => {
+					group.forEach(segIdx => {
+						segmentToGroup[segIdx] = groupIdx;
+					});
+				});
+
+				// Update group count display
+				groupCountSpan.textContent = `グループ数: ${segmentGroups.length}`;
+			}
+
+			function applyGroupingVisuals() {
+				if (!groupingEnabled) {
+					// Remove grouping visuals
+					asrSegments.forEach(seg => {
+						seg.classList.remove('group-first', 'group-last', 'group-middle');
+						seg.style.removeProperty('--group-color');
+					});
+					return;
+				}
+
+				// Apply grouping visuals
+				const colors = ['bg-blue-50', 'bg-green-50', 'bg-yellow-50', 'bg-purple-50', 'bg-pink-50'];
+
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					const groupIdx = segmentToGroup[idx];
+					if (groupIdx === undefined) return;
+
+					const group = segmentGroups[groupIdx];
+					const posInGroup = group.indexOf(idx);
+					const isFirst = posInGroup === 0;
+					const isLast = posInGroup === group.length - 1;
+
+					seg.classList.remove('group-first', 'group-last', 'group-middle');
+					if (group.length === 1) {
+						seg.classList.add('group-first', 'group-last');
+					} else if (isFirst) {
+						seg.classList.add('group-first');
+					} else if (isLast) {
+						seg.classList.add('group-last');
+					} else {
+						seg.classList.add('group-middle');
+					}
+
+					// Add subtle background color per group
+					seg.dataset.groupIdx = groupIdx;
+				});
+			}
+
+			function getGroupForSegment(segIdx) {
+				const groupIdx = segmentToGroup[segIdx];
+				if (groupIdx === undefined) return [segIdx];
+				return segmentGroups[groupIdx];
+			}
+
+			// Initialize grouping
+			enableGroupingCheckbox.addEventListener('change', () => {
+				groupingEnabled = enableGroupingCheckbox.checked;
+				if (groupingEnabled) {
+					groupingOptions.classList.remove('hidden');
+					buildSegmentGroups();
+					applyGroupingVisuals();
+				} else {
+					groupingOptions.classList.add('hidden');
+					applyGroupingVisuals();
+				}
+				// Clear selection when toggling
+				selectedSegments.clear();
+				updateSelectionUI();
+			});
+
+			groupingThresholdSelect.addEventListener('change', () => {
+				if (groupingEnabled) {
+					buildSegmentGroups();
+					applyGroupingVisuals();
+					// Clear selection when threshold changes
+					selectedSegments.clear();
+					updateSelectionUI();
+				}
+			});
+
+			// Load saved preferences
+			const savedGrouping = localStorage.getItem('zbor-grouping-enabled');
+			const savedThreshold = localStorage.getItem('zbor-grouping-threshold');
+			if (savedGrouping === 'true') {
+				enableGroupingCheckbox.checked = true;
+				groupingEnabled = true;
+				groupingOptions.classList.remove('hidden');
+			}
+			if (savedThreshold) {
+				groupingThresholdSelect.value = savedThreshold;
+			}
+
+			// Save preferences on change
+			enableGroupingCheckbox.addEventListener('change', () => {
+				localStorage.setItem('zbor-grouping-enabled', enableGroupingCheckbox.checked);
+			});
+			groupingThresholdSelect.addEventListener('change', () => {
+				localStorage.setItem('zbor-grouping-threshold', groupingThresholdSelect.value);
+			});
+
+			// Initial build if grouping is enabled
+			if (groupingEnabled) {
+				buildSegmentGroups();
+				applyGroupingVisuals();
+			}
 
 			function updateSelectionUI() {
 				if (selectedSegments.size === 0) {
@@ -1130,6 +1287,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 						seg.classList.remove('bg-orange-100', 'text-orange-700');
 						seg.classList.add('text-gray-400');
 					});
+					adjacentSegmentsRow.classList.add('hidden');
 					return;
 				}
 
@@ -1152,20 +1310,42 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				const minIdx = sortedIndices[0];
 				const maxIdx = sortedIndices[sortedIndices.length - 1];
 
-				// Find time range
-				let startTime = Infinity, endTime = 0;
+				// Build segment data array for easier access
+				const segmentData = [];
 				asrSegments.forEach(seg => {
 					const idx = parseInt(seg.dataset.segIdx);
-					if (idx >= minIdx && idx <= maxIdx) {
-						const start = parseFloat(seg.dataset.start);
-						const end = parseFloat(seg.dataset.end);
-						if (start < startTime) startTime = start;
-						if (end > endTime) endTime = end;
+					// Avoid duplicates (same segment might appear in multiple display rows)
+					if (!segmentData.find(s => s.idx === idx)) {
+						segmentData.push({
+							idx: idx,
+							start: parseFloat(seg.dataset.start),
+							end: parseFloat(seg.dataset.end),
+							element: seg
+						});
 					}
 				});
+				segmentData.sort((a, b) => a.idx - b.idx);
 
-				const duration = endTime - startTime;
-				selectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+				// Find time range of selected segments
+				let selectionStartTime = Infinity, selectionEndTime = 0;
+				for (const seg of segmentData) {
+					if (seg.idx >= minIdx && seg.idx <= maxIdx) {
+						if (seg.start < selectionStartTime) selectionStartTime = seg.start;
+						if (seg.end > selectionEndTime) selectionEndTime = seg.end;
+					}
+				}
+
+				const duration = selectionEndTime - selectionStartTime;
+
+				// Show group info if grouping is enabled
+				let infoText = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${selectionStartTime.toFixed(1)}s - ${selectionEndTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+				if (groupingEnabled) {
+					const groupIdx = segmentToGroup[minIdx];
+					if (groupIdx !== undefined) {
+						infoText += ` [グループ${groupIdx + 1}]`;
+					}
+				}
+				selectionInfo.textContent = infoText;
 			}
 
 			// === ASR Segment Hover Highlighting ===
@@ -1225,33 +1405,49 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 					e.stopPropagation();
 					const idx = parseInt(seg.dataset.segIdx);
 
-					if (e.shiftKey && selectedSegments.size > 0) {
-						// Shift-click: select range
-						const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
-						const minIdx = Math.min(sortedIndices[0], idx);
-						const maxIdx = Math.max(sortedIndices[sortedIndices.length - 1], idx);
-						for (let i = minIdx; i <= maxIdx; i++) {
-							selectedSegments.add(i);
+					if (groupingEnabled) {
+						// Grouping mode: select/deselect entire group
+						const group = getGroupForSegment(idx);
+						const allSelected = group.every(i => selectedSegments.has(i));
+
+						if (allSelected) {
+							// Deselect entire group
+							group.forEach(i => selectedSegments.delete(i));
+						} else {
+							// Select entire group (clear others first)
+							selectedSegments.clear();
+							group.forEach(i => selectedSegments.add(i));
 						}
-					} else if (selectedSegments.has(idx)) {
-						selectedSegments.delete(idx);
 					} else {
-						// Ensure contiguous selection
-						if (selectedSegments.size > 0) {
+						// Original behavior
+						if (e.shiftKey && selectedSegments.size > 0) {
+							// Shift-click: select range
 							const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
-							const minIdx = sortedIndices[0];
-							const maxIdx = sortedIndices[sortedIndices.length - 1];
-							if (idx < minIdx - 1 || idx > maxIdx + 1) {
-								// Not adjacent, clear and select new
-								selectedSegments.clear();
-							} else {
-								// Fill the gap
-								for (let i = Math.min(minIdx, idx); i <= Math.max(maxIdx, idx); i++) {
-									selectedSegments.add(i);
+							const minIdx = Math.min(sortedIndices[0], idx);
+							const maxIdx = Math.max(sortedIndices[sortedIndices.length - 1], idx);
+							for (let i = minIdx; i <= maxIdx; i++) {
+								selectedSegments.add(i);
+							}
+						} else if (selectedSegments.has(idx)) {
+							selectedSegments.delete(idx);
+						} else {
+							// Ensure contiguous selection
+							if (selectedSegments.size > 0) {
+								const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+								const minIdx = sortedIndices[0];
+								const maxIdx = sortedIndices[sortedIndices.length - 1];
+								if (idx < minIdx - 1 || idx > maxIdx + 1) {
+									// Not adjacent, clear and select new
+									selectedSegments.clear();
+								} else {
+									// Fill the gap
+									for (let i = Math.min(minIdx, idx); i <= Math.max(maxIdx, idx); i++) {
+										selectedSegments.add(i);
+									}
 								}
 							}
+							selectedSegments.add(idx);
 						}
-						selectedSegments.add(idx);
 					}
 
 					updateSelectionUI();
@@ -1306,6 +1502,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 
 			// Boundary preview state
 			let boundaryPreviewData = null; // { peaks, duration, segmentStart, segmentEnd }
+			let modalSegmentRange = null; // { minIdx, maxIdx } - segment range for current modal session
 
 			let currentPreviewResult = null; // Store preview result for apply
 			let currentDebugInfo = null; // Store full debug info for copy
@@ -1635,6 +1832,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 			async function openRetranscribeModal() {
 				if (selectedSegments.size === 0) return;
 
+				// Determine segment range from selection
 				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
 				const minIdx = sortedIndices[0];
 				const maxIdx = sortedIndices[sortedIndices.length - 1];
@@ -1654,9 +1852,8 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				const duration = endTime - startTime;
 				modalSelectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
 
-				// Copy values from selection bar
-				modalModel.value = document.getElementById('retranscribe-model').value;
-				modalTempo.value = retranscribeTempo.value;
+				// Store segment range for use in executePreview
+				modalSegmentRange = { minIdx, maxIdx };
 
 				// Fetch original segments
 				const data = await fetchTranscriptData();
@@ -1708,6 +1905,7 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 				retranscribeModal.classList.add('hidden');
 				currentPreviewResult = null;
 				currentDebugInfo = null;
+				modalSegmentRange = null;
 				updateAlignInfoVisibility(false);
 				// Reset boundary preview
 				boundaryPreviewData = null;
@@ -1737,11 +1935,10 @@ templ transcriptSyncContent(sourceID string, title string, filename string, tran
 
 			// Execute preview (without saving)
 			async function executePreview() {
-				if (selectedSegments.size === 0) return;
+				if (!modalSegmentRange) return;
 
-				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
-				const segmentStart = sortedIndices[0];
-				const segmentEnd = sortedIndices[sortedIndices.length - 1];
+				const segmentStart = modalSegmentRange.minIdx;
+				const segmentEnd = modalSegmentRange.maxIdx;
 				const tempo = parseFloat(modalTempo.value);
 				const model = modalModel.value;
 
