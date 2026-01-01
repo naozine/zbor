@@ -1,0 +1,362 @@
+package components
+
+import (
+	"fmt"
+	"zbor/internal/storage/sqlc"
+	"zbor/web/layouts"
+)
+
+var stepLabels = map[string]string{
+	"preparing":    "準備中",
+	"converting":   "音声変換中",
+	"transcribing": "文字起こし中",
+	"saving":       "保存中",
+}
+
+func getStepLabel(step *string) string {
+	if step == nil || *step == "" {
+		return ""
+	}
+	if label, ok := stepLabels[*step]; ok {
+		return label
+	}
+	return *step
+}
+
+templ JobList(jobs []sqlc.ProcessingJob) {
+	@layouts.Base("Jobs") {
+		<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+			<h1 class="text-2xl font-bold text-gray-900 mb-6">Processing Jobs</h1>
+
+			if len(jobs) == 0 {
+				<div class="text-center py-12 bg-white rounded-lg shadow">
+					<svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+					</svg>
+					<h3 class="mt-2 text-sm font-medium text-gray-900">No jobs</h3>
+					<p class="mt-1 text-sm text-gray-500">No processing jobs found.</p>
+				</div>
+			} else {
+				<div class="bg-white shadow overflow-hidden sm:rounded-md">
+					<ul class="divide-y divide-gray-200">
+						for _, job := range jobs {
+							<li class="px-4 py-4 sm:px-6" id={ "job-" + job.ID }>
+								<div class="flex items-center justify-between">
+									<div class="flex items-center flex-1">
+										@jobStatusIcon(job.Status)
+										<div class="ml-3 flex-1">
+											<div class="flex items-center justify-between">
+												<p class="text-sm font-medium text-gray-900">
+													{ job.Type }
+												</p>
+												<div class="flex items-center space-x-2">
+													if job.Status != nil {
+														<span class={ "px-2 py-1 text-xs font-semibold rounded-full", jobStatusClass(*job.Status) }>
+															{ *job.Status }
+														</span>
+													}
+													<span class="text-sm text-gray-500">
+														{ job.CreatedAt.Format("15:04:05") }
+													</span>
+													if job.Status != nil && (*job.Status == "completed" || *job.Status == "failed") && job.SourceID != nil {
+														<button
+															onclick={ retranscribeJob(*job.SourceID) }
+															class="p-1 text-gray-400 hover:text-blue-500 transition-colors"
+															title="Retranscribe"
+														>
+															<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+															</svg>
+														</button>
+													}
+													<button
+														onclick={ deleteJob(job.ID, job.Status) }
+														class="p-1 text-gray-400 hover:text-red-500 transition-colors"
+														title="Delete job"
+													>
+														<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+															<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+														</svg>
+													</button>
+												</div>
+											</div>
+											<p class="text-xs text-gray-500 font-mono mt-1">
+												{ job.ID }
+											</p>
+											if job.Status != nil && *job.Status == "running" {
+												<div class="mt-2">
+													<div class="flex items-center justify-between text-xs text-gray-600 mb-1">
+														<span>{ getStepLabel(job.CurrentStep) }</span>
+														<span>{ fmt.Sprintf("%d%%", getProgress(job.Progress)) }</span>
+													</div>
+													<div class="w-full bg-gray-200 rounded-full h-2">
+														<div
+															class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+															style={ fmt.Sprintf("width: %d%%", getProgress(job.Progress)) }
+														></div>
+													</div>
+												</div>
+											}
+										</div>
+									</div>
+								</div>
+								if job.Error != nil && *job.Error != "" {
+									<div class="mt-2 text-sm text-red-600 ml-8">
+										{ *job.Error }
+									</div>
+								}
+							</li>
+						}
+					</ul>
+				</div>
+			}
+
+			<div class="mt-4">
+				<a href="/audio/upload" class="text-blue-600 hover:text-blue-800">
+					&larr; Back to Audio Upload
+				</a>
+			</div>
+		</div>
+
+		<!-- Delete confirmation modal -->
+		<div id="delete-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
+			<div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+				<div class="px-6 py-4 border-b border-gray-200">
+					<h3 class="text-lg font-medium text-gray-900">Delete Job</h3>
+				</div>
+				<div class="px-6 py-4">
+					<p class="text-gray-600">Are you sure you want to delete this job?</p>
+					<p class="text-gray-500 text-sm mt-1">This action cannot be undone.</p>
+					<div id="running-warning" class="hidden mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+						<div class="flex">
+							<svg class="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+							</svg>
+							<p class="ml-2 text-sm text-yellow-700">This job is currently running. Deleting it will interrupt the process.</p>
+						</div>
+					</div>
+				</div>
+				<div class="px-6 py-4 bg-gray-50 flex justify-end space-x-3 rounded-b-lg">
+					<button onclick="closeDeleteModal()" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+						Cancel
+					</button>
+					<button id="confirm-delete-btn" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">
+						Delete
+					</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- Retranscribe confirmation modal -->
+		<div id="retranscribe-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden items-center justify-center z-50">
+			<div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+				<div class="px-6 py-4 border-b border-gray-200">
+					<h3 class="text-lg font-medium text-gray-900">Retranscribe</h3>
+				</div>
+				<div class="px-6 py-4">
+					<p class="text-gray-600">Are you sure you want to retranscribe this audio?</p>
+					<p class="text-gray-500 text-sm mt-1">This will delete the existing transcription and create a new one.</p>
+
+					<div class="mt-4">
+						<label for="model-select" class="block text-sm font-medium text-gray-700 mb-1">Model</label>
+						<select id="model-select" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+							<option value="reazonspeech">ReazonSpeech (Japanese, accurate)</option>
+							<option value="sensevoice">SenseVoice (Multilingual, fast)</option>
+						</select>
+						<p class="mt-1 text-xs text-gray-500">ReazonSpeech: 高精度日本語。SenseVoice: 多言語対応、小さな音声も検出。</p>
+					</div>
+				</div>
+				<div class="px-6 py-4 bg-gray-50 flex justify-end space-x-3 rounded-b-lg">
+					<button onclick="closeRetranscribeModal()" class="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
+						Cancel
+					</button>
+					<button id="confirm-retranscribe-btn" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">
+						Retranscribe
+					</button>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			let deleteJobId = null;
+			let retranscribeSourceId = null;
+
+			function showDeleteModal(jobId, isRunning) {
+				deleteJobId = jobId;
+				const modal = document.getElementById('delete-modal');
+				const warning = document.getElementById('running-warning');
+
+				if (isRunning) {
+					warning.classList.remove('hidden');
+				} else {
+					warning.classList.add('hidden');
+				}
+
+				modal.classList.remove('hidden');
+				modal.classList.add('flex');
+			}
+
+			function closeDeleteModal() {
+				const modal = document.getElementById('delete-modal');
+				modal.classList.add('hidden');
+				modal.classList.remove('flex');
+				deleteJobId = null;
+			}
+
+			function showRetranscribeModal(sourceId) {
+				retranscribeSourceId = sourceId;
+				const modal = document.getElementById('retranscribe-modal');
+				modal.classList.remove('hidden');
+				modal.classList.add('flex');
+			}
+
+			function closeRetranscribeModal() {
+				const modal = document.getElementById('retranscribe-modal');
+				modal.classList.add('hidden');
+				modal.classList.remove('flex');
+				retranscribeSourceId = null;
+			}
+
+			document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+				if (!deleteJobId) return;
+
+				try {
+					const response = await fetch(`/api/jobs/${deleteJobId}`, {
+						method: 'DELETE'
+					});
+
+					if (response.ok) {
+						// Remove the job from the list
+						const jobElement = document.getElementById(`job-${deleteJobId}`);
+						if (jobElement) {
+							jobElement.remove();
+						}
+						closeDeleteModal();
+					} else {
+						alert('Failed to delete job');
+					}
+				} catch (error) {
+					console.error('Error deleting job:', error);
+					alert('Failed to delete job');
+				}
+			});
+
+			document.getElementById('confirm-retranscribe-btn').addEventListener('click', async () => {
+				if (!retranscribeSourceId) return;
+
+				const modelSelect = document.getElementById('model-select');
+				const selectedModel = modelSelect.value;
+
+				try {
+					const response = await fetch(`/api/audio/${retranscribeSourceId}/retranscribe-full`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({ model: selectedModel })
+					});
+
+					if (response.ok) {
+						closeRetranscribeModal();
+						// Reload the page to show the new job
+						location.reload();
+					} else {
+						const data = await response.json();
+						alert('Failed to start retranscription: ' + (data.error || 'Unknown error'));
+					}
+				} catch (error) {
+					console.error('Error starting retranscription:', error);
+					alert('Failed to start retranscription');
+				}
+			});
+
+			// Close modal when clicking outside
+			document.getElementById('delete-modal').addEventListener('click', (e) => {
+				if (e.target.id === 'delete-modal') {
+					closeDeleteModal();
+				}
+			});
+
+			document.getElementById('retranscribe-modal').addEventListener('click', (e) => {
+				if (e.target.id === 'retranscribe-modal') {
+					closeRetranscribeModal();
+				}
+			});
+
+			// Auto-refresh every 3 seconds if there are running jobs
+			const hasRunningJobs = document.querySelector('[data-status="running"]') !== null;
+			if (hasRunningJobs) {
+				setTimeout(() => location.reload(), 3000);
+			}
+		</script>
+	}
+}
+
+script deleteJob(jobId string, status *string) {
+	const isRunning = status === 'running';
+	showDeleteModal(jobId, isRunning);
+}
+
+script retranscribeJob(sourceId string) {
+	showRetranscribeModal(sourceId);
+}
+
+func getProgress(progress *int64) int {
+	if progress == nil {
+		return 0
+	}
+	return int(*progress)
+}
+
+templ jobStatusIcon(status *string) {
+	if status != nil {
+		switch *status {
+			case "queued":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+					</svg>
+				</div>
+			case "running":
+				<div class="flex-shrink-0" data-status="running">
+					<svg class="h-5 w-5 text-blue-500 animate-spin" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+				</div>
+			case "completed":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+					</svg>
+				</div>
+			case "failed":
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+					</svg>
+				</div>
+			default:
+				<div class="flex-shrink-0">
+					<svg class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+					</svg>
+				</div>
+		}
+	}
+}
+
+func jobStatusClass(status string) string {
+	switch status {
+	case "queued":
+		return "bg-gray-100 text-gray-800"
+	case "running":
+		return "bg-blue-100 text-blue-800"
+	case "completed":
+		return "bg-green-100 text-green-800"
+	case "failed":
+		return "bg-red-100 text-red-800"
+	default:
+		return "bg-gray-100 text-gray-800"
+	}
+}

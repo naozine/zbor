@@ -1,12 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 
+	"zbor/internal/asr"
 	"zbor/internal/handlers"
+	"zbor/internal/ingestion"
+	"zbor/internal/storage"
+	"zbor/internal/storage/sqlc"
 	"zbor/internal/version"
+	"zbor/internal/worker"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -23,6 +32,106 @@ func main() {
 		port = "8080"
 	}
 
+	// データベースパスを取得（デフォルト: ~/.zbor/zbor.db）
+	dbPath := os.Getenv("ZBOR_DB_PATH")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		dbPath = filepath.Join(home, ".zbor", "zbor.db")
+	}
+
+	// データベース初期化
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+	log.Printf("Database initialized at %s", dbPath)
+
+	// データディレクトリ（デフォルト: ~/.zbor/data）
+	dataDir := os.Getenv("ZBOR_DATA_DIR")
+	if dataDir == "" {
+		home, _ := os.UserHomeDir()
+		dataDir = filepath.Join(home, ".zbor", "data")
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	// ASRモデルパス（デフォルト: ./models/sherpa-onnx-...）
+	modelDir := os.Getenv("ZBOR_MODEL_DIR")
+	if modelDir == "" {
+		modelDir = "models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
+	}
+
+	// VADモデルパス（デフォルト: ./models/silero_vad.onnx）
+	vadModelPath := os.Getenv("ZBOR_VAD_MODEL")
+	if vadModelPath == "" {
+		vadModelPath = "models/silero_vad.onnx"
+	}
+	// VADモデルが存在しない場合は空にして無効化
+	if _, err := os.Stat(vadModelPath); os.IsNotExist(err) {
+		log.Printf("VAD model not found at %s, VAD disabled", vadModelPath)
+		vadModelPath = ""
+	}
+
+	// リポジトリ作成
+	articleRepo := storage.NewArticleRepository(db)
+	tagRepo := storage.NewTagRepository(db)
+	jobRepo := storage.NewJobRepository(db)
+	sourceRepo := storage.NewSourceRepository(db)
+	artifactRepo := storage.NewArtifactRepository(db)
+
+	// ASR設定
+	asrConfig := &asr.Config{
+		EncoderPath:  filepath.Join(modelDir, "encoder-epoch-99-avg-1.onnx"),
+		DecoderPath:  filepath.Join(modelDir, "decoder-epoch-99-avg-1.onnx"),
+		JoinerPath:   filepath.Join(modelDir, "joiner-epoch-99-avg-1.onnx"),
+		TokensPath:   filepath.Join(modelDir, "tokens.txt"),
+		VADModelPath: vadModelPath,
+		SampleRate:   16000,
+		NumThreads:   4,
+	}
+
+	// 音声取り込みモジュール
+	audioIngester := ingestion.NewAudioIngester(
+		sourceRepo,
+		artifactRepo,
+		articleRepo,
+		jobRepo,
+		asrConfig,
+		dataDir,
+	)
+
+	// AudioHandler（ストリーミング・同期ページ用にリポジトリとASR設定も渡す）
+	audioHandler := handlers.NewAudioHandler(audioIngester, sourceRepo, artifactRepo, articleRepo, jobRepo, asrConfig)
+
+	// ワーカー作成・起動
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := worker.NewWorker(jobRepo)
+	// 音声文字起こしハンドラーを登録
+	transcribeHandler := func(ctx context.Context, job *sqlc.ProcessingJob) error {
+		return audioIngester.ProcessTranscription(ctx, job, func(progress int, step string) {
+			_ = jobRepo.UpdateProgressWithStep(ctx, job.ID, int64(progress), step)
+		})
+	}
+	// Register handler for all transcription job types
+	w.RegisterHandler(storage.JobTypeTranscribe, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeReazonSpeech, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeSenseVoice, transcribeHandler)
+	w.RegisterHandler(storage.JobTypeTranscribeSenseVoiceBeam, transcribeHandler)
+	w.Start(ctx)
+	defer w.Stop()
+
+	// ハンドラー作成
+	articleHandler := handlers.NewArticleHandler(articleRepo)
+	tagHandler := handlers.NewTagHandler(tagRepo)
+	jobHandler := handlers.NewJobHandler(jobRepo)
+
 	// Echoインスタンスの作成
 	e := echo.New()
 
@@ -30,9 +139,14 @@ func main() {
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 
-	// ルートの登録
+	// ルートの登録（Web UI）
 	e.GET("/", handlers.Home)
 	e.GET("/about", handlers.About)
+	e.GET("/articles", articleHandler.ListPage)
+	e.GET("/articles/:id", articleHandler.DetailPage)
+	e.GET("/audio/upload", audioHandler.UploadPage)
+	e.GET("/audio/:source_id/sync", audioHandler.TranscriptSyncPage)
+	e.GET("/jobs", jobHandler.ListPage)
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{
 			"status":  "ok",
@@ -40,9 +154,55 @@ func main() {
 		})
 	})
 
+	// API ルートの登録
+	api := e.Group("/api")
+
+	// Articles API
+	api.GET("/articles", articleHandler.List)
+	api.GET("/articles/search", articleHandler.Search)
+	api.POST("/articles", articleHandler.Create)
+	api.GET("/articles/:id", articleHandler.Get)
+	api.PUT("/articles/:id", articleHandler.Update)
+	api.DELETE("/articles/:id", articleHandler.Delete)
+	api.POST("/articles/:id/tags/:tag_id", articleHandler.AddTag)
+	api.DELETE("/articles/:id/tags/:tag_id", articleHandler.RemoveTag)
+
+	// Tags API
+	api.GET("/tags", tagHandler.List)
+	api.POST("/tags", tagHandler.Create)
+	api.GET("/tags/:id", tagHandler.Get)
+	api.PUT("/tags/:id", tagHandler.Update)
+	api.DELETE("/tags/:id", tagHandler.Delete)
+
+	// Jobs API
+	api.GET("/jobs", jobHandler.List)
+	api.GET("/jobs/stats", jobHandler.Stats)
+	api.GET("/jobs/:id", jobHandler.Get)
+	api.DELETE("/jobs/:id", jobHandler.Delete)
+
+	// Ingest API
+	api.POST("/ingest/audio", audioHandler.Upload)
+
+	// Audio API
+	api.GET("/audio/:source_id/stream", audioHandler.Stream)
+	api.GET("/audio/:source_id/transcript", audioHandler.Transcript)
+	api.GET("/audio/:source_id/waveform", audioHandler.Waveform)
+	api.POST("/audio/:source_id/retranscribe", audioHandler.Retranscribe)
+	api.POST("/audio/:source_id/retranscribe-full", audioHandler.RetranscribeFull)
+
+	// グレースフルシャットダウン
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		log.Println("Shutting down...")
+		cancel()
+		e.Close()
+	}()
+
 	// サーバー起動
 	log.Printf("Starting Zbor v%s on port %s", version.Version, port)
 	if err := e.Start(fmt.Sprintf(":%s", port)); err != nil {
-		log.Fatal(err)
+		log.Println("Server stopped")
 	}
 }

@@ -1,0 +1,2133 @@
+package components
+
+import (
+	"fmt"
+	"zbor/internal/asr"
+	"zbor/web/layouts"
+)
+
+// TranscriptSyncOptions contains all options for the transcript sync page
+type TranscriptSyncOptions struct {
+	SourceID      string
+	Title         string
+	Filename      string
+	Transcript    *asr.Result
+	Segments      []asr.DisplaySegment
+	RangeStart    float64
+	RangeEnd      float64
+	TotalDuration float64
+	IntervalSec   float64
+	ShowWaveform  bool
+}
+
+// Helper function to format seconds as M:SS
+func formatTimeShort(seconds float64) string {
+	mins := int(seconds) / 60
+	secs := int(seconds) % 60
+	return fmt.Sprintf("%d:%02d", mins, secs)
+}
+
+// TranscriptSyncWithOptions renders the transcript sync page with full options
+templ TranscriptSyncWithOptions(opts TranscriptSyncOptions) {
+	@transcriptSyncContent(opts.SourceID, opts.Title, opts.Filename, opts.Transcript, opts.Segments, opts.RangeStart, opts.RangeEnd, opts.TotalDuration, opts.IntervalSec, opts.ShowWaveform)
+}
+
+// TranscriptSync is the legacy entry point (uses defaults)
+templ TranscriptSync(sourceID string, title string, filename string, transcript *asr.Result, displaySegments []asr.DisplaySegment) {
+	@transcriptSyncContent(sourceID, title, filename, transcript, displaySegments, 0, 300, 300, 10, false)
+}
+
+templ transcriptSyncContent(sourceID string, title string, filename string, transcript *asr.Result, displaySegments []asr.DisplaySegment, rangeStart float64, rangeEnd float64, totalDuration float64, intervalSec float64, showWaveform bool) {
+	@layouts.Base(title + " - Transcript Sync") {
+		<!-- Fixed Header with Controls -->
+		<div class="fixed top-0 left-0 right-0 z-50 bg-white shadow-md">
+			<div class="max-w-4xl mx-auto">
+				<!-- Title Bar -->
+				<div class="px-4 sm:px-6 lg:px-8 py-3 border-b border-gray-200 flex items-center">
+					<a href="/articles" class="text-blue-600 hover:text-blue-800 flex items-center mr-4">
+						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+						</svg>
+					</a>
+					<div class="flex-1 min-w-0">
+						<h1 class="text-lg font-bold text-gray-900 truncate">{ title }</h1>
+						if filename != "" {
+							<p class="text-sm text-gray-500 truncate">{ filename }</p>
+						}
+					</div>
+				</div>
+
+				<!-- Audio Player Controls -->
+				<div class="px-4 sm:px-6 lg:px-8 py-3 bg-gray-50 border-b border-gray-200">
+					<div class="flex items-center space-x-4">
+						<button
+							id="play-btn"
+							class="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-700 text-white rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+						>
+							<svg id="play-icon" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+							</svg>
+							<svg id="pause-icon" class="w-5 h-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+							</svg>
+						</button>
+
+						<div class="flex-1">
+							<div class="relative">
+								<input
+									type="range"
+									id="seek-bar"
+									min="0"
+									max="100"
+									value="0"
+									class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+								/>
+							</div>
+							<div class="flex justify-between text-xs text-gray-500 mt-1">
+								<span id="current-time">0:00</span>
+								<span id="seek-debug" class="text-blue-500 font-mono hidden"></span>
+								<span id="total-time">0:00</span>
+							</div>
+						</div>
+
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Speed:</label>
+							<select id="speed-select" class="text-sm border-gray-300 rounded-md">
+								<option value="0.5">0.5x</option>
+								<option value="0.75">0.75x</option>
+								<option value="1" selected>1x</option>
+								<option value="1.25">1.25x</option>
+								<option value="1.5">1.5x</option>
+								<option value="2">2x</option>
+							</select>
+						</div>
+					</div>
+				</div>
+
+				<!-- Display Options -->
+				<div class="px-4 sm:px-6 lg:px-8 py-2 bg-gray-100 flex items-center flex-wrap gap-4 text-sm">
+					<div class="flex items-center space-x-2">
+						<label class="text-gray-600">Interval:</label>
+						<select id="interval-select" class="text-sm border-gray-300 rounded-md">
+							<option value="3" selected>3s</option>
+							<option value="5">5s</option>
+							<option value="10">10s</option>
+						</select>
+					</div>
+					<!-- Range selector -->
+					<div class="flex items-center space-x-2">
+						<label class="text-gray-600">Range:</label>
+						<input
+							type="text"
+							id="range-start"
+							class="w-14 text-sm border-gray-300 rounded-md text-center"
+							placeholder="0:00"
+							value={ formatTimeShort(rangeStart) }
+						/>
+						<span class="text-gray-400">-</span>
+						<input
+							type="text"
+							id="range-end"
+							class="w-14 text-sm border-gray-300 rounded-md text-center"
+							placeholder="end"
+							value={ formatTimeShort(rangeEnd) }
+						/>
+						<span class="text-gray-400">/</span>
+						<span id="total-duration-display" class="text-gray-500">{ formatTimeShort(totalDuration) }</span>
+						<button id="range-apply" class="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs">適用</button>
+						<button id="range-prev" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs" title="前へ">←</button>
+						<button id="range-next" class="px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded text-xs" title="次へ">→</button>
+					</div>
+					<label class="flex items-center space-x-2 cursor-pointer">
+						<input type="checkbox" id="show-segments" class="rounded border-gray-300" checked/>
+						<span class="text-gray-600">Segments</span>
+					</label>
+					<label class="flex items-center space-x-2 cursor-pointer">
+						if showWaveform {
+							<input type="checkbox" id="show-waveform" class="rounded border-gray-300" checked/>
+						} else {
+							<input type="checkbox" id="show-waveform" class="rounded border-gray-300"/>
+						}
+						<span class="text-gray-600">Waveform</span>
+					</label>
+				</div>
+			</div>
+		</div>
+
+		<!-- Spacer for fixed header (approx height of header) -->
+		<div class="h-40"></div>
+
+		<!-- Transcript Content -->
+		<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
+			<div class="bg-white shadow rounded-lg">
+				<!-- Grouping Controls Header -->
+				<div class="px-6 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+					<label class="flex items-center space-x-2 cursor-pointer">
+						<input type="checkbox" id="enable-grouping" class="rounded border-gray-300 text-blue-600"/>
+						<span class="text-sm text-gray-700">隣接セグメントをグループ化</span>
+					</label>
+					<div id="grouping-options" class="hidden flex items-center space-x-4 text-sm">
+						<div class="flex items-center space-x-2">
+							<label class="text-gray-600">閾値:</label>
+							<select id="grouping-threshold" class="text-sm border-gray-300 rounded py-1 px-2">
+								<option value="200">200ms</option>
+								<option value="300">300ms</option>
+								<option value="500" selected>500ms</option>
+								<option value="750">750ms</option>
+								<option value="1000">1秒</option>
+								<option value="1500">1.5秒</option>
+								<option value="2000">2秒</option>
+								<option value="3000">3秒</option>
+								<option value="5000">5秒</option>
+							</select>
+						</div>
+						<span id="group-count" class="text-gray-500">グループ数: -</span>
+					</div>
+				</div>
+				<div class="px-6 py-6">
+					<div id="transcript" class="space-y-2 font-mono text-sm">
+						for _, ds := range displaySegments {
+							<div
+								class="display-segment"
+								data-seg-index={ fmt.Sprintf("%d", ds.Index) }
+								data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+								data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+								data-interval={ fmt.Sprintf("%.2f", intervalSec) }
+							>
+								<!-- Waveform visualization (hidden by default) -->
+								<div class="waveform-container hidden mb-2 relative border border-gray-200 rounded bg-gray-50">
+									<!-- Playhead indicator (red vertical line) -->
+									<div class="playhead absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none hidden" style="left: 0%"></div>
+									<!-- Timeline ruler -->
+									<div class="waveform-ruler h-4 relative text-[10px] text-gray-400 select-none border-b border-gray-200">
+										<!-- Ticks will be drawn by JavaScript -->
+									</div>
+									<!-- Waveform canvas -->
+									<canvas
+										class="waveform-canvas w-full h-8 cursor-pointer"
+										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+										data-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+									></canvas>
+									<!-- Text layer (time-aligned tokens) -->
+									<div class="text-layer h-5 relative overflow-hidden border-t border-gray-200">
+										for _, elem := range ds.Elements {
+											if elem.Type == "text" {
+												<span
+													class="token-aligned absolute text-xs cursor-pointer hover:bg-blue-100 rounded truncate"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+													data-duration={ fmt.Sprintf("%.3f", elem.Duration) }
+													data-row-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+													data-row-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+												>{ elem.Text }</span>
+											}
+										}
+									</div>
+									<!-- Segment layer (time-aligned bars with labels) -->
+									<div class="segment-layer h-4 relative overflow-hidden border-t border-gray-100 bg-gray-100">
+										for _, asrSeg := range ds.ASRSegments {
+											<div
+												class="segment-aligned absolute h-full bg-blue-200 border border-blue-300 rounded-sm flex items-center justify-center cursor-pointer hover:bg-blue-300 text-[9px] text-blue-700 font-medium truncate"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												data-start={ fmt.Sprintf("%.2f", asrSeg.StartTime) }
+												data-end={ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+												data-row-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+												data-row-end={ fmt.Sprintf("%.2f", ds.EndTime) }
+											>
+												seg{ fmt.Sprintf("%d", asrSeg.Index) }
+											</div>
+										}
+									</div>
+								</div>
+								<!-- Compact text row (shown when waveform is hidden) -->
+								<div class="compact-text-row flex hover:bg-gray-50 rounded py-1">
+									<span
+										class="time-label text-gray-400 mr-3 whitespace-nowrap cursor-pointer hover:text-blue-600"
+										data-start={ fmt.Sprintf("%.2f", ds.StartTime) }
+									>
+										[{ asr.FormatTimeRange(ds.StartTime, ds.EndTime) }]
+									</span>
+									<span class="flex-1 flex flex-wrap">
+										for _, elem := range ds.Elements {
+											if elem.Type == "text" {
+												<span
+													class="token cursor-pointer hover:bg-blue-100 rounded transition-colors"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+												>{ elem.Text }</span>
+											} else {
+												<span
+													class="silence text-gray-300 cursor-pointer hover:text-gray-400"
+													data-start={ fmt.Sprintf("%.3f", elem.StartTime) }
+												>{ elem.Text }</span>
+											}
+										}
+									</span>
+								</div>
+								<!-- ASR Segment info (toggleable, clickable for selection) -->
+								if len(ds.ASRSegments) > 0 {
+									<div class="segment-info text-xs ml-20 mb-1 flex items-center flex-wrap">
+										for _, asrSeg := range ds.ASRSegments {
+											<span
+												class="asr-segment mr-1 px-1 py-0.5 rounded cursor-pointer text-gray-400 hover:bg-blue-100 hover:text-blue-600"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												data-start={ fmt.Sprintf("%.2f", asrSeg.StartTime) }
+												data-end={ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+											>
+												└─ seg{ fmt.Sprintf("%d", asrSeg.Index) }: { fmt.Sprintf("%.2f", asrSeg.StartTime) }-{ fmt.Sprintf("%.2f", asrSeg.EndTime) }
+											</span>
+											<button
+												class="json-btn mr-3 px-1 py-0.5 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded text-[10px] font-mono"
+												data-seg-idx={ fmt.Sprintf("%d", asrSeg.Index-1) }
+												title="Show JSON"
+											>
+												{ "{}" }
+											</button>
+										}
+									</div>
+								}
+							</div>
+						}
+					</div>
+				</div>
+
+				<!-- Keyboard shortcuts help -->
+				<div class="px-6 py-4 border-t border-gray-200 text-sm text-gray-500">
+					<p>Keyboard shortcuts: <kbd class="px-1 bg-gray-100 rounded">Space</kbd> Play/Pause,
+					<kbd class="px-1 bg-gray-100 rounded">←</kbd>/<kbd class="px-1 bg-gray-100 rounded">→</kbd> Seek 5s</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- Selection Bar (hidden by default) -->
+		<div id="selection-bar" class="fixed bottom-0 left-0 right-0 z-50 bg-white shadow-lg border-t border-gray-200 transform translate-y-full transition-transform duration-200">
+			<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+				<div class="flex items-center justify-between">
+					<div class="flex items-center space-x-4">
+						<span class="text-sm text-gray-600">選択中:</span>
+						<span id="selection-info" class="text-sm font-medium text-blue-600">-</span>
+						<button id="clear-selection" class="text-sm text-gray-500 hover:text-gray-700">クリア</button>
+					</div>
+					<button
+						id="retranscribe-btn"
+						class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+					>
+						再文字起こし
+					</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- Processing overlay -->
+		<div id="processing-overlay" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg p-6 shadow-xl">
+				<div class="flex items-center space-x-3">
+					<svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+					<span class="text-gray-700">再文字起こし中...</span>
+				</div>
+			</div>
+		</div>
+
+		<!-- JSON Modal -->
+		<div id="json-modal" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+				<div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+					<h3 id="json-modal-title" class="font-medium text-gray-900">Segment Details</h3>
+					<button id="json-modal-close" class="text-gray-400 hover:text-gray-600">
+						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+				</div>
+				<div class="p-4 overflow-auto flex-1">
+					<pre id="json-modal-content" class="text-xs font-mono bg-gray-50 p-3 rounded overflow-x-auto whitespace-pre-wrap"></pre>
+				</div>
+			</div>
+		</div>
+
+		<!-- Re-transcribe Modal -->
+		<div id="retranscribe-modal" class="fixed inset-0 z-[100] bg-black bg-opacity-50 hidden flex items-center justify-center">
+			<div class="bg-white rounded-lg shadow-xl max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
+				<!-- Header -->
+				<div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+					<h3 class="font-medium text-gray-900">再文字起こし</h3>
+					<button id="retranscribe-modal-close" class="text-gray-400 hover:text-gray-600">
+						<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+				</div>
+
+				<!-- Parameters -->
+				<div class="px-4 py-3 border-b border-gray-200 bg-gray-50">
+					<div class="flex items-center space-x-6">
+						<div class="flex items-center space-x-2">
+							<span class="text-sm text-gray-600">対象:</span>
+							<span id="modal-selection-info" class="text-sm font-medium text-blue-600">-</span>
+						</div>
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Model:</label>
+							<select id="modal-model" class="text-sm border-gray-300 rounded-md">
+								<option value="reazonspeech" selected>ReazonSpeech</option>
+								<option value="sensevoice">SenseVoice</option>
+								<option value="whisper">Whisper</option>
+								<option value="whisper:align">Whisper (Align)</option>
+							</select>
+						</div>
+						<div class="flex items-center space-x-2">
+							<label class="text-sm text-gray-600">Tempo:</label>
+							<select id="modal-tempo" class="text-sm border-gray-300 rounded-md">
+								<option value="0.5">0.5x (超低速)</option>
+								<option value="0.6">0.6x</option>
+								<option value="0.7">0.7x</option>
+								<option value="0.75">0.75x</option>
+								<option value="0.8">0.8x</option>
+								<option value="0.85" selected>0.85x</option>
+								<option value="0.9">0.9x</option>
+								<option value="0.95">0.95x</option>
+								<option value="1.0">1.0x (通常)</option>
+							</select>
+						</div>
+						<button
+							id="modal-execute-btn"
+							class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+						>
+							実行
+						</button>
+						<div id="modal-loading" class="hidden flex items-center space-x-2 text-gray-500">
+							<svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+							</svg>
+							<span class="text-sm">処理中...</span>
+						</div>
+					</div>
+					<!-- Boundary Adjustment Options -->
+					<div class="mt-3 pt-3 border-t border-gray-200">
+						<div class="flex items-start space-x-4">
+							<label class="flex items-center space-x-2 cursor-pointer">
+								<input type="checkbox" id="modal-auto-adjust" class="rounded border-gray-300 text-blue-500 focus:ring-blue-500"/>
+								<span class="text-sm text-gray-700">波形に基づいて境界を自動調整</span>
+							</label>
+							<div id="boundary-params" class="hidden flex items-center space-x-4 text-sm">
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">閾値:</label>
+									<select id="modal-boundary-threshold" class="text-xs border-gray-300 rounded py-1">
+										<option value="0.01">0.01</option>
+										<option value="0.02">0.02</option>
+										<option value="0.03" selected>0.03</option>
+										<option value="0.05">0.05</option>
+										<option value="0.08">0.08</option>
+										<option value="0.10">0.10</option>
+									</select>
+								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">マージ間隔:</label>
+									<select id="modal-boundary-merge" class="text-xs border-gray-300 rounded py-1">
+										<option value="100">100ms</option>
+										<option value="200">200ms</option>
+										<option value="300" selected>300ms</option>
+										<option value="400">400ms</option>
+										<option value="500">500ms</option>
+									</select>
+								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">検索範囲:</label>
+									<select id="modal-boundary-search" class="text-xs border-gray-300 rounded py-1">
+										<option value="500">500ms</option>
+										<option value="750">750ms</option>
+										<option value="1000" selected>1000ms</option>
+										<option value="1500">1500ms</option>
+										<option value="2000">2000ms</option>
+									</select>
+								</div>
+								<div class="flex items-center space-x-1">
+									<label class="text-gray-500">パディング:</label>
+									<select id="modal-boundary-padding" class="text-xs border-gray-300 rounded py-1">
+										<option value="0">0ms</option>
+										<option value="100">100ms</option>
+										<option value="200" selected>200ms</option>
+										<option value="300">300ms</option>
+										<option value="500">500ms</option>
+									</select>
+								</div>
+							</div>
+						</div>
+						<!-- Boundary Adjustment Preview -->
+						<div id="boundary-preview" class="hidden mt-2">
+							<!-- Waveform Preview -->
+							<div class="relative bg-gray-100 rounded border border-gray-200 h-16">
+								<canvas id="boundary-waveform-canvas" class="w-full h-full"></canvas>
+								<!-- Original boundary markers -->
+								<div id="boundary-marker-start-orig" class="absolute top-0 bottom-0 w-0.5 bg-gray-400 pointer-events-none" style="left: 0%"></div>
+								<div id="boundary-marker-end-orig" class="absolute top-0 bottom-0 w-0.5 bg-gray-400 pointer-events-none" style="left: 100%"></div>
+								<!-- Adjusted boundary markers -->
+								<div id="boundary-marker-start-adj" class="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none hidden" style="left: 0%"></div>
+								<div id="boundary-marker-end-adj" class="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none hidden" style="left: 100%"></div>
+								<!-- Segment region highlight -->
+								<div id="boundary-segment-region" class="absolute top-0 bottom-0 bg-yellow-200 opacity-30 pointer-events-none"></div>
+								<!-- Adjusted region highlight -->
+								<div id="boundary-adjusted-region" class="absolute top-0 bottom-0 bg-blue-200 opacity-30 pointer-events-none hidden"></div>
+							</div>
+							<!-- Time axis -->
+							<div id="boundary-time-axis" class="flex justify-between text-xs text-gray-500 mt-1">
+								<span id="boundary-time-start">0:00</span>
+								<span id="boundary-time-end">0:00</span>
+							</div>
+							<!-- Boundary Adjustment Result -->
+							<div id="boundary-result" class="hidden mt-2 p-2 bg-blue-50 rounded-md text-sm">
+								<div class="flex items-center space-x-4">
+									<span class="text-gray-600">時間範囲:</span>
+									<span class="font-mono">
+										<span id="boundary-original-range" class="text-gray-500"></span>
+										<span class="mx-2">→</span>
+										<span id="boundary-adjusted-range" class="text-blue-700 font-medium"></span>
+									</span>
+									<span id="boundary-diff" class="text-xs text-blue-600"></span>
+								</div>
+								<div id="boundary-clusters" class="mt-1 text-xs text-gray-600"></div>
+							</div>
+							<!-- Legend -->
+							<div class="mt-1 flex items-center space-x-4 text-xs text-gray-500">
+								<span class="flex items-center"><span class="inline-block w-3 h-3 bg-yellow-200 border border-yellow-300 mr-1"></span>選択範囲</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-3 bg-blue-200 border border-blue-300 mr-1"></span>調整後</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-0.5 bg-gray-400 mr-1"></span>元の境界</span>
+								<span class="flex items-center"><span class="inline-block w-3 h-0.5 bg-blue-500 mr-1"></span>調整後の境界</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Whisper Align Info (hidden by default, shown for whisper:align) -->
+				<div id="modal-align-info" class="hidden border-b border-gray-200">
+					<!-- Whisper Raw Output -->
+					<div class="px-4 py-2 bg-blue-50 border-b border-blue-100">
+						<div class="flex items-center space-x-2">
+							<span class="text-xs font-medium text-blue-700">Whisper出力:</span>
+							<span id="modal-whisper-raw" class="text-xs text-blue-900 font-mono"></span>
+						</div>
+					</div>
+					<!-- Alignment Diff -->
+					<div class="px-4 py-2 bg-gray-50">
+						<div class="flex items-start space-x-2">
+							<span class="text-xs font-medium text-gray-700 whitespace-nowrap">マッチング:</span>
+							<div id="modal-alignment-diff" class="text-xs font-mono flex flex-wrap"></div>
+						</div>
+						<div class="mt-1 flex items-center space-x-3 text-xs text-gray-500">
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-gray-200 rounded mr-1"></span>共通</span>
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-green-200 rounded mr-1"></span>追加</span>
+							<span class="flex items-center"><span class="inline-block w-3 h-3 bg-red-200 rounded mr-1"></span>削除</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Content: Two Panes -->
+				<div class="flex-1 overflow-hidden flex">
+					<!-- Left Pane: Original -->
+					<div class="w-1/2 border-r border-gray-200 flex flex-col">
+						<div class="px-4 py-2 bg-gray-100 border-b border-gray-200">
+							<h4 class="text-sm font-medium text-gray-700">元のテキスト</h4>
+						</div>
+						<div id="modal-original-content" class="flex-1 overflow-auto p-4 text-sm font-mono">
+							<!-- Original segments will be displayed here -->
+						</div>
+					</div>
+
+					<!-- Right Pane: Result -->
+					<div class="w-1/2 flex flex-col">
+						<div class="px-4 py-2 bg-gray-100 border-b border-gray-200">
+							<h4 class="text-sm font-medium text-gray-700">再文字起こし結果</h4>
+						</div>
+						<div id="modal-result-content" class="flex-1 overflow-auto p-4 text-sm font-mono">
+							<div class="text-gray-400 text-center py-8">
+								「実行」ボタンを押して再文字起こしを実行してください
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Footer -->
+				<div class="px-4 py-3 border-t border-gray-200 flex justify-between">
+					<button
+						id="modal-copy-debug-btn"
+						class="px-3 py-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 text-sm rounded-md focus:outline-none hidden"
+						title="デバッグ情報をクリップボードにコピー"
+					>
+						<span class="flex items-center space-x-1">
+							<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+							</svg>
+							<span>Debug</span>
+						</span>
+					</button>
+					<div class="flex space-x-3">
+						<button
+							id="modal-cancel-btn"
+							class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded-md focus:outline-none"
+						>
+							キャンセル
+						</button>
+						<button
+							id="modal-apply-btn"
+							class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+							disabled
+						>
+							適用
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<audio id="audio" preload="auto" data-source-id={ sourceID }>
+			<source src={ "/api/audio/" + sourceID + "/stream" } type="audio/wav"/>
+		</audio>
+
+		<script>
+			const audio = document.getElementById('audio');
+			const playBtn = document.getElementById('play-btn');
+			const playIcon = document.getElementById('play-icon');
+			const pauseIcon = document.getElementById('pause-icon');
+			const seekBar = document.getElementById('seek-bar');
+			const currentTimeEl = document.getElementById('current-time');
+			const totalTimeEl = document.getElementById('total-time');
+			const speedSelect = document.getElementById('speed-select');
+			const intervalSelect = document.getElementById('interval-select');
+			const showSegmentsCheckbox = document.getElementById('show-segments');
+			const tokens = document.querySelectorAll('.token');
+			const silences = document.querySelectorAll('.silence');
+			const timeLabels = document.querySelectorAll('.time-label');
+			const displaySegments = document.querySelectorAll('.display-segment');
+			const segmentInfos = document.querySelectorAll('.segment-info');
+			const waveformContainers = document.querySelectorAll('.waveform-container');
+			const showWaveformCheckbox = document.getElementById('show-waveform');
+			const rangeStartInput = document.getElementById('range-start');
+			const rangeEndInput = document.getElementById('range-end');
+			const rangeApplyBtn = document.getElementById('range-apply');
+			const rangePrevBtn = document.getElementById('range-prev');
+			const rangeNextBtn = document.getElementById('range-next');
+
+			let currentTokenIndex = -1;
+			let currentSegmentIndex = -1;
+			let waveformData = null; // Cached waveform data
+
+			// Format time as M:SS
+			function formatTime(seconds) {
+				const mins = Math.floor(seconds / 60);
+				const secs = Math.floor(seconds % 60);
+				return `${mins}:${secs.toString().padStart(2, '0')}`;
+			}
+
+			// Update play/pause button
+			function updatePlayButton() {
+				if (audio.paused) {
+					playIcon.classList.remove('hidden');
+					pauseIcon.classList.add('hidden');
+				} else {
+					playIcon.classList.add('hidden');
+					pauseIcon.classList.remove('hidden');
+				}
+			}
+
+			// Toggle segment info visibility
+			function updateSegmentInfoVisibility() {
+				const show = showSegmentsCheckbox.checked;
+				segmentInfos.forEach(info => {
+					info.style.display = show ? 'block' : 'none';
+				});
+			}
+			showSegmentsCheckbox.addEventListener('change', updateSegmentInfoVisibility);
+			updateSegmentInfoVisibility();
+
+			// === Range Navigation ===
+			function parseTimeInput(str) {
+				// Parse M:SS or SS format
+				const parts = str.split(':');
+				if (parts.length === 2) {
+					return parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+				}
+				return parseFloat(str) || 0;
+			}
+
+			function applyRange() {
+				const start = parseTimeInput(rangeStartInput.value);
+				const end = parseTimeInput(rangeEndInput.value);
+				const url = new URL(window.location.href);
+				url.searchParams.set('start', start.toString());
+				url.searchParams.set('end', end.toString());
+				window.location.href = url.toString();
+			}
+
+			function navigateRange(direction) {
+				const start = parseTimeInput(rangeStartInput.value);
+				const end = parseTimeInput(rangeEndInput.value);
+				const duration = end - start;
+				let newStart, newEnd;
+
+				if (direction === 'prev') {
+					newStart = Math.max(0, start - duration);
+					newEnd = newStart + duration;
+				} else {
+					newStart = start + duration;
+					newEnd = newStart + duration;
+				}
+
+				const url = new URL(window.location.href);
+				url.searchParams.set('start', newStart.toString());
+				url.searchParams.set('end', newEnd.toString());
+				window.location.href = url.toString();
+			}
+
+			rangeApplyBtn.addEventListener('click', applyRange);
+			rangePrevBtn.addEventListener('click', () => navigateRange('prev'));
+			rangeNextBtn.addEventListener('click', () => navigateRange('next'));
+
+			// === Waveform Display ===
+			async function fetchWaveformData() {
+				if (waveformData) return waveformData;
+				try {
+					const response = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=50`);
+					if (response.ok) {
+						waveformData = await response.json();
+					}
+				} catch (err) {
+					console.error('Failed to fetch waveform:', err);
+				}
+				return waveformData;
+			}
+
+			function drawWaveform(canvas, peaks, startTime, endTime, duration) {
+				const ctx = canvas.getContext('2d');
+				const width = canvas.offsetWidth;
+				const height = canvas.offsetHeight;
+
+				// Set canvas resolution
+				canvas.width = width * 2;
+				canvas.height = height * 2;
+				ctx.scale(2, 2);
+
+				// Clear
+				ctx.clearRect(0, 0, width, height);
+
+				// Calculate which peaks to draw
+				const samplesPerSec = peaks.length / duration;
+				const startIdx = Math.floor(startTime * samplesPerSec);
+				const endIdx = Math.ceil(endTime * samplesPerSec);
+				const peaksToShow = peaks.slice(startIdx, endIdx);
+
+				if (peaksToShow.length === 0) return;
+
+				const barWidth = width / peaksToShow.length;
+				const centerY = height / 2;
+
+				// Draw waveform bars
+				ctx.fillStyle = '#9CA3AF'; // gray-400
+				for (let i = 0; i < peaksToShow.length; i++) {
+					const peak = peaksToShow[i];
+					const barHeight = peak * height * 0.9;
+					const x = i * barWidth;
+					ctx.fillRect(x, centerY - barHeight / 2, Math.max(1, barWidth - 1), barHeight);
+				}
+			}
+
+			function drawRuler(container, startTime, endTime, intervalSec) {
+				const ruler = container.querySelector('.waveform-ruler');
+				ruler.innerHTML = '';
+
+				const width = container.offsetWidth;
+				const duration = endTime - startTime;
+
+				// Draw ticks every 2 seconds
+				const tickInterval = intervalSec <= 5 ? 1 : 2;
+				for (let t = Math.ceil(startTime / tickInterval) * tickInterval; t <= endTime; t += tickInterval) {
+					const x = ((t - startTime) / duration) * width;
+					const tick = document.createElement('div');
+					tick.className = 'absolute';
+					tick.style.left = `${x}px`;
+					tick.innerHTML = `<div class="h-2 border-l border-gray-300"></div><div class="text-[9px]">${formatTime(t)}</div>`;
+					ruler.appendChild(tick);
+				}
+			}
+
+			// Position time-aligned tokens
+			function positionTimeAlignedElements(container, startTime, endTime) {
+				const duration = endTime - startTime;
+
+				// Position tokens
+				container.querySelectorAll('.token-aligned').forEach(token => {
+					const tokenStart = parseFloat(token.dataset.start);
+					const tokenDuration = parseFloat(token.dataset.duration) || 0.1;
+					const rowStart = parseFloat(token.dataset.rowStart);
+					const rowEnd = parseFloat(token.dataset.rowEnd);
+
+					// Calculate position as percentage
+					const left = ((tokenStart - rowStart) / (rowEnd - rowStart)) * 100;
+					const width = (tokenDuration / (rowEnd - rowStart)) * 100;
+
+					token.style.left = `${Math.max(0, left)}%`;
+					token.style.width = `${Math.min(width, 100 - left)}%`;
+					token.style.minWidth = '0';
+				});
+
+				// Position segments (already have data attributes)
+				container.querySelectorAll('.segment-aligned').forEach(seg => {
+					const segStart = parseFloat(seg.dataset.start);
+					const segEnd = parseFloat(seg.dataset.end);
+					const rowStart = parseFloat(seg.dataset.rowStart);
+					const rowEnd = parseFloat(seg.dataset.rowEnd);
+
+					// Clamp to row boundaries
+					const clampedStart = Math.max(segStart, rowStart);
+					const clampedEnd = Math.min(segEnd, rowEnd);
+
+					if (clampedEnd > clampedStart) {
+						const left = ((clampedStart - rowStart) / (rowEnd - rowStart)) * 100;
+						const width = ((clampedEnd - clampedStart) / (rowEnd - rowStart)) * 100;
+
+						seg.style.left = `${left}%`;
+						seg.style.width = `${width}%`;
+					} else {
+						seg.style.display = 'none';
+					}
+				});
+			}
+
+			// Update playhead position for all visible containers
+			function updatePlayheads(currentTime) {
+				displaySegments.forEach(seg => {
+					const container = seg.querySelector('.waveform-container');
+					if (container.classList.contains('hidden')) return;
+
+					const playhead = container.querySelector('.playhead');
+					const startTime = parseFloat(seg.dataset.start);
+					const endTime = parseFloat(seg.dataset.end);
+
+					if (currentTime >= startTime && currentTime <= endTime) {
+						const left = ((currentTime - startTime) / (endTime - startTime)) * 100;
+						playhead.style.left = `${left}%`;
+						playhead.classList.remove('hidden');
+					} else {
+						playhead.classList.add('hidden');
+					}
+				});
+			}
+
+			async function updateWaveformDisplay() {
+				const show = showWaveformCheckbox.checked;
+
+				// Toggle visibility of waveform containers and compact text rows
+				waveformContainers.forEach(container => {
+					container.classList.toggle('hidden', !show);
+				});
+				document.querySelectorAll('.compact-text-row').forEach(row => {
+					row.classList.toggle('hidden', show);
+				});
+
+				if (!show) {
+					// Remove waveform param from URL
+					const url = new URL(window.location.href);
+					url.searchParams.delete('waveform');
+					history.replaceState(null, '', url.toString());
+					return;
+				}
+
+				// Fetch waveform data
+				const data = await fetchWaveformData();
+				if (!data) return;
+
+				// Draw waveform for each display segment
+				displaySegments.forEach((seg, idx) => {
+					const container = seg.querySelector('.waveform-container');
+					const canvas = container.querySelector('.waveform-canvas');
+					const startTime = parseFloat(seg.dataset.start);
+					const endTime = parseFloat(seg.dataset.end);
+					const intervalSec = parseFloat(seg.dataset.interval) || 3;
+
+					drawWaveform(canvas, data.peaks, startTime, endTime, data.duration);
+					drawRuler(container, startTime, endTime, intervalSec);
+					positionTimeAlignedElements(container, startTime, endTime);
+				});
+
+				// Update playhead to current position
+				updatePlayheads(audio.currentTime);
+
+				// Update URL to persist waveform state
+				const url = new URL(window.location.href);
+				url.searchParams.set('waveform', '1');
+				history.replaceState(null, '', url.toString());
+			}
+
+			// Waveform click to seek
+			document.querySelectorAll('.waveform-canvas').forEach(canvas => {
+				canvas.addEventListener('click', (e) => {
+					const rect = canvas.getBoundingClientRect();
+					const x = e.clientX - rect.left;
+					const ratio = x / rect.width;
+
+					const startTime = parseFloat(canvas.dataset.start);
+					const endTime = parseFloat(canvas.dataset.end);
+					const seekTime = startTime + (endTime - startTime) * ratio;
+
+					console.log(`[Waveform Click] x=${x.toFixed(1)}px, ratio=${ratio.toFixed(4)}, seekTime=${seekTime.toFixed(6)}s`);
+
+					const seekDebug = document.getElementById('seek-debug');
+					seekDebug.textContent = `seek: ${seekTime.toFixed(3)}s`;
+					seekDebug.classList.remove('hidden');
+
+					audio.currentTime = seekTime;
+
+					// Show actual position after seek
+					setTimeout(() => {
+						const diff = (audio.currentTime - seekTime) * 1000;
+						console.log(`[After Seek] requested=${seekTime.toFixed(6)}s, actual=${audio.currentTime.toFixed(6)}s, diff=${diff.toFixed(3)}ms`);
+						seekDebug.textContent = `seek: ${seekTime.toFixed(3)}s → actual: ${audio.currentTime.toFixed(3)}s (${diff >= 0 ? '+' : ''}${diff.toFixed(1)}ms)`;
+					}, 10);
+
+					audio.play();
+				});
+			});
+
+			showWaveformCheckbox.addEventListener('change', updateWaveformDisplay);
+
+			// Initialize waveform if checked
+			if (showWaveformCheckbox.checked) {
+				updateWaveformDisplay();
+			}
+
+			// Highlight current token and segment based on audio time
+			function updateHighlight() {
+				const currentTime = audio.currentTime;
+				let newTokenIndex = -1;
+				let newSegmentIndex = -1;
+
+				// Find current token
+				for (let i = tokens.length - 1; i >= 0; i--) {
+					const startTime = parseFloat(tokens[i].dataset.start);
+					if (currentTime >= startTime) {
+						newTokenIndex = i;
+						break;
+					}
+				}
+
+				// Find current display segment
+				for (let i = displaySegments.length - 1; i >= 0; i--) {
+					const startTime = parseFloat(displaySegments[i].dataset.start);
+					const endTime = parseFloat(displaySegments[i].dataset.end);
+					if (currentTime >= startTime && currentTime < endTime) {
+						newSegmentIndex = i;
+						break;
+					}
+				}
+
+				// Update token highlight
+				if (newTokenIndex !== currentTokenIndex) {
+					if (currentTokenIndex >= 0 && currentTokenIndex < tokens.length) {
+						tokens[currentTokenIndex].classList.remove('bg-yellow-200');
+					}
+					if (newTokenIndex >= 0) {
+						tokens[newTokenIndex].classList.add('bg-yellow-200');
+					}
+					currentTokenIndex = newTokenIndex;
+				}
+
+				// Update segment highlight
+				if (newSegmentIndex !== currentSegmentIndex) {
+					if (currentSegmentIndex >= 0 && currentSegmentIndex < displaySegments.length) {
+						displaySegments[currentSegmentIndex].classList.remove('bg-blue-50');
+					}
+					if (newSegmentIndex >= 0) {
+						displaySegments[newSegmentIndex].classList.add('bg-blue-50');
+						displaySegments[newSegmentIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+					}
+					currentSegmentIndex = newSegmentIndex;
+				}
+			}
+
+			// Play/Pause
+			playBtn.addEventListener('click', () => {
+				if (audio.paused) {
+					audio.play();
+				} else {
+					audio.pause();
+				}
+			});
+
+			audio.addEventListener('play', updatePlayButton);
+			audio.addEventListener('pause', updatePlayButton);
+
+			// Time update
+			audio.addEventListener('timeupdate', () => {
+				currentTimeEl.textContent = formatTime(audio.currentTime);
+				seekBar.value = (audio.currentTime / audio.duration) * 100 || 0;
+				updateHighlight();
+				updatePlayheads(audio.currentTime);
+			});
+
+			audio.addEventListener('loadedmetadata', () => {
+				totalTimeEl.textContent = formatTime(audio.duration);
+			});
+
+			// Seek bar
+			seekBar.addEventListener('input', () => {
+				const time = (seekBar.value / 100) * audio.duration;
+				audio.currentTime = time;
+			});
+
+			// Speed control
+			speedSelect.addEventListener('change', () => {
+				audio.playbackRate = parseFloat(speedSelect.value);
+			});
+
+			// Interval change - reload with new interval
+			intervalSelect.addEventListener('change', () => {
+				const interval = intervalSelect.value;
+				const url = new URL(window.location.href);
+				url.searchParams.set('interval', interval);
+				window.location.href = url.toString();
+			});
+
+			// Click on token to seek
+			tokens.forEach(token => {
+				token.addEventListener('click', () => {
+					const startTime = parseFloat(token.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Click on silence to seek
+			silences.forEach(silence => {
+				silence.addEventListener('click', () => {
+					const startTime = parseFloat(silence.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Click on time label to seek
+			timeLabels.forEach(label => {
+				label.addEventListener('click', () => {
+					const startTime = parseFloat(label.dataset.start);
+					audio.currentTime = startTime;
+					audio.play();
+				});
+			});
+
+			// Keyboard shortcuts
+			document.addEventListener('keydown', (e) => {
+				if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+				switch (e.code) {
+					case 'Space':
+						e.preventDefault();
+						if (audio.paused) {
+							audio.play();
+						} else {
+							audio.pause();
+						}
+						break;
+					case 'ArrowLeft':
+						e.preventDefault();
+						audio.currentTime = Math.max(0, audio.currentTime - 5);
+						break;
+					case 'ArrowRight':
+						e.preventDefault();
+						audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+						break;
+				}
+			});
+
+			// Restore interval from URL
+			const urlParams = new URLSearchParams(window.location.search);
+			const savedInterval = urlParams.get('interval');
+			if (savedInterval) {
+				intervalSelect.value = savedInterval;
+			}
+
+			// Source ID (used for API calls)
+			const sourceID = audio.dataset.sourceId;
+
+			// === JSON Modal ===
+			const jsonModal = document.getElementById('json-modal');
+			const jsonModalTitle = document.getElementById('json-modal-title');
+			const jsonModalContent = document.getElementById('json-modal-content');
+			const jsonModalClose = document.getElementById('json-modal-close');
+			const jsonBtns = document.querySelectorAll('.json-btn');
+
+			let transcriptData = null;
+
+			// Fetch transcript data once
+			async function fetchTranscriptData() {
+				if (transcriptData) return transcriptData;
+				const response = await fetch(`/api/audio/${sourceID}/transcript`);
+				if (response.ok) {
+					transcriptData = await response.json();
+				}
+				return transcriptData;
+			}
+
+			// Show segment JSON
+			jsonBtns.forEach(btn => {
+				btn.addEventListener('click', async (e) => {
+					e.stopPropagation();
+					const segIdx = parseInt(btn.dataset.segIdx);
+
+					const data = await fetchTranscriptData();
+					if (!data || !data.segments || segIdx >= data.segments.length) {
+						jsonModalContent.textContent = 'セグメントデータが見つかりません';
+						jsonModalTitle.textContent = `Segment ${segIdx + 1}`;
+						jsonModal.classList.remove('hidden');
+						return;
+					}
+
+					const segment = data.segments[segIdx];
+
+					// Find tokens within this segment's time range
+					const segmentTokens = (data.tokens || []).filter(t =>
+						t.start_time >= segment.start_time && t.start_time < segment.end_time
+					);
+
+					const displayData = {
+						segment: segment,
+						tokens: segmentTokens,
+						token_count: segmentTokens.length
+					};
+
+					jsonModalTitle.textContent = `Segment ${segIdx + 1} (${segment.start_time.toFixed(2)}s - ${segment.end_time.toFixed(2)}s)`;
+					jsonModalContent.textContent = JSON.stringify(displayData, null, 2);
+					jsonModal.classList.remove('hidden');
+				});
+			});
+
+			// Close modal
+			jsonModalClose.addEventListener('click', () => {
+				jsonModal.classList.add('hidden');
+			});
+			jsonModal.addEventListener('click', (e) => {
+				if (e.target === jsonModal) {
+					jsonModal.classList.add('hidden');
+				}
+			});
+
+			// === Segment Selection for Re-transcription ===
+			const asrSegments = document.querySelectorAll('.asr-segment');
+			const selectionBar = document.getElementById('selection-bar');
+			const selectionInfo = document.getElementById('selection-info');
+			const clearSelectionBtn = document.getElementById('clear-selection');
+			const retranscribeBtn = document.getElementById('retranscribe-btn');
+			const processingOverlay = document.getElementById('processing-overlay');
+			// Grouping elements
+			const enableGroupingCheckbox = document.getElementById('enable-grouping');
+			const groupingOptions = document.getElementById('grouping-options');
+			const groupingThresholdSelect = document.getElementById('grouping-threshold');
+			const groupCountSpan = document.getElementById('group-count');
+
+			let selectedSegments = new Set();
+			let segmentGroups = []; // Array of arrays, each containing segment indices
+			let segmentToGroup = {}; // Map from segment index to group index
+			let groupingEnabled = false;
+
+			// === Grouping Logic ===
+			function buildSegmentGroups() {
+				// Build segment data from DOM
+				const segmentData = [];
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (!segmentData.find(s => s.idx === idx)) {
+						segmentData.push({
+							idx: idx,
+							start: parseFloat(seg.dataset.start),
+							end: parseFloat(seg.dataset.end)
+						});
+					}
+				});
+				segmentData.sort((a, b) => a.idx - b.idx);
+
+				if (segmentData.length === 0) {
+					segmentGroups = [];
+					segmentToGroup = {};
+					return;
+				}
+
+				const thresholdMs = parseInt(groupingThresholdSelect.value);
+				const thresholdSec = thresholdMs / 1000;
+
+				segmentGroups = [];
+				segmentToGroup = {};
+				let currentGroup = [segmentData[0].idx];
+
+				for (let i = 1; i < segmentData.length; i++) {
+					const prev = segmentData[i - 1];
+					const curr = segmentData[i];
+					const gap = curr.start - prev.end;
+
+					if (gap <= thresholdSec) {
+						currentGroup.push(curr.idx);
+					} else {
+						segmentGroups.push(currentGroup);
+						currentGroup = [curr.idx];
+					}
+				}
+				segmentGroups.push(currentGroup);
+
+				// Build reverse map
+				segmentGroups.forEach((group, groupIdx) => {
+					group.forEach(segIdx => {
+						segmentToGroup[segIdx] = groupIdx;
+					});
+				});
+
+				// Update group count display
+				groupCountSpan.textContent = `グループ数: ${segmentGroups.length}`;
+			}
+
+			function applyGroupingVisuals() {
+				if (!groupingEnabled) {
+					// Remove grouping visuals
+					asrSegments.forEach(seg => {
+						seg.classList.remove('group-first', 'group-last', 'group-middle');
+						seg.style.removeProperty('--group-color');
+					});
+					return;
+				}
+
+				// Apply grouping visuals
+				const colors = ['bg-blue-50', 'bg-green-50', 'bg-yellow-50', 'bg-purple-50', 'bg-pink-50'];
+
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					const groupIdx = segmentToGroup[idx];
+					if (groupIdx === undefined) return;
+
+					const group = segmentGroups[groupIdx];
+					const posInGroup = group.indexOf(idx);
+					const isFirst = posInGroup === 0;
+					const isLast = posInGroup === group.length - 1;
+
+					seg.classList.remove('group-first', 'group-last', 'group-middle');
+					if (group.length === 1) {
+						seg.classList.add('group-first', 'group-last');
+					} else if (isFirst) {
+						seg.classList.add('group-first');
+					} else if (isLast) {
+						seg.classList.add('group-last');
+					} else {
+						seg.classList.add('group-middle');
+					}
+
+					// Add subtle background color per group
+					seg.dataset.groupIdx = groupIdx;
+				});
+			}
+
+			function getGroupForSegment(segIdx) {
+				const groupIdx = segmentToGroup[segIdx];
+				if (groupIdx === undefined) return [segIdx];
+				return segmentGroups[groupIdx];
+			}
+
+			// Initialize grouping
+			enableGroupingCheckbox.addEventListener('change', () => {
+				groupingEnabled = enableGroupingCheckbox.checked;
+				if (groupingEnabled) {
+					groupingOptions.classList.remove('hidden');
+					buildSegmentGroups();
+					applyGroupingVisuals();
+				} else {
+					groupingOptions.classList.add('hidden');
+					applyGroupingVisuals();
+				}
+				// Clear selection when toggling
+				selectedSegments.clear();
+				updateSelectionUI();
+			});
+
+			groupingThresholdSelect.addEventListener('change', () => {
+				if (groupingEnabled) {
+					buildSegmentGroups();
+					applyGroupingVisuals();
+					// Clear selection when threshold changes
+					selectedSegments.clear();
+					updateSelectionUI();
+				}
+			});
+
+			// Load saved preferences
+			const savedGrouping = localStorage.getItem('zbor-grouping-enabled');
+			const savedThreshold = localStorage.getItem('zbor-grouping-threshold');
+			if (savedGrouping === 'true') {
+				enableGroupingCheckbox.checked = true;
+				groupingEnabled = true;
+				groupingOptions.classList.remove('hidden');
+			}
+			if (savedThreshold) {
+				groupingThresholdSelect.value = savedThreshold;
+			}
+
+			// Save preferences on change
+			enableGroupingCheckbox.addEventListener('change', () => {
+				localStorage.setItem('zbor-grouping-enabled', enableGroupingCheckbox.checked);
+			});
+			groupingThresholdSelect.addEventListener('change', () => {
+				localStorage.setItem('zbor-grouping-threshold', groupingThresholdSelect.value);
+			});
+
+			// Initial build if grouping is enabled
+			if (groupingEnabled) {
+				buildSegmentGroups();
+				applyGroupingVisuals();
+			}
+
+			function updateSelectionUI() {
+				if (selectedSegments.size === 0) {
+					selectionBar.classList.add('translate-y-full');
+					asrSegments.forEach(seg => {
+						seg.classList.remove('bg-orange-100', 'text-orange-700');
+						seg.classList.add('text-gray-400');
+					});
+					adjacentSegmentsRow.classList.add('hidden');
+					return;
+				}
+
+				selectionBar.classList.remove('translate-y-full');
+
+				// Update segment highlighting
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (selectedSegments.has(idx)) {
+						seg.classList.add('bg-orange-100', 'text-orange-700');
+						seg.classList.remove('text-gray-400');
+					} else {
+						seg.classList.remove('bg-orange-100', 'text-orange-700');
+						seg.classList.add('text-gray-400');
+					}
+				});
+
+				// Update selection info
+				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+				const minIdx = sortedIndices[0];
+				const maxIdx = sortedIndices[sortedIndices.length - 1];
+
+				// Build segment data array for easier access
+				const segmentData = [];
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					// Avoid duplicates (same segment might appear in multiple display rows)
+					if (!segmentData.find(s => s.idx === idx)) {
+						segmentData.push({
+							idx: idx,
+							start: parseFloat(seg.dataset.start),
+							end: parseFloat(seg.dataset.end),
+							element: seg
+						});
+					}
+				});
+				segmentData.sort((a, b) => a.idx - b.idx);
+
+				// Find time range of selected segments
+				let selectionStartTime = Infinity, selectionEndTime = 0;
+				for (const seg of segmentData) {
+					if (seg.idx >= minIdx && seg.idx <= maxIdx) {
+						if (seg.start < selectionStartTime) selectionStartTime = seg.start;
+						if (seg.end > selectionEndTime) selectionEndTime = seg.end;
+					}
+				}
+
+				const duration = selectionEndTime - selectionStartTime;
+
+				// Show group info if grouping is enabled
+				let infoText = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${selectionStartTime.toFixed(1)}s - ${selectionEndTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+				if (groupingEnabled) {
+					const groupIdx = segmentToGroup[minIdx];
+					if (groupIdx !== undefined) {
+						infoText += ` [グループ${groupIdx + 1}]`;
+					}
+				}
+				selectionInfo.textContent = infoText;
+			}
+
+			// === ASR Segment Hover Highlighting ===
+			// Highlight all instances of the same segment and corresponding tokens on hover
+			function highlightSegment(segIdx, highlight) {
+				// Find all ASR segment elements with the same index
+				const allAsrSegs = document.querySelectorAll(`.asr-segment[data-seg-idx="${segIdx}"]`);
+
+				// Get time range from matching elements
+				let startTime = Infinity, endTime = 0;
+				allAsrSegs.forEach(seg => {
+					const start = parseFloat(seg.dataset.start);
+					const end = parseFloat(seg.dataset.end);
+					if (start < startTime) startTime = start;
+					if (end > endTime) endTime = end;
+				});
+
+				// Highlight/unhighlight ASR segment labels
+				allAsrSegs.forEach(seg => {
+					if (highlight) {
+						seg.classList.add('bg-purple-100', 'text-purple-700');
+						seg.classList.remove('text-gray-400');
+					} else {
+						seg.classList.remove('bg-purple-100', 'text-purple-700');
+						// Only restore gray if not selected
+						if (!selectedSegments.has(parseInt(seg.dataset.segIdx))) {
+							seg.classList.add('text-gray-400');
+						}
+					}
+				});
+
+				// Highlight/unhighlight tokens within the time range
+				tokens.forEach(token => {
+					const tokenStart = parseFloat(token.dataset.start);
+					if (tokenStart >= startTime && tokenStart <= endTime) {
+						if (highlight) {
+							token.classList.add('bg-purple-200');
+						} else {
+							token.classList.remove('bg-purple-200');
+						}
+					}
+				});
+			}
+
+			// Click on ASR segment to toggle selection, hover to highlight
+			asrSegments.forEach(seg => {
+				// Hover events
+				seg.addEventListener('mouseenter', () => {
+					highlightSegment(seg.dataset.segIdx, true);
+				});
+				seg.addEventListener('mouseleave', () => {
+					highlightSegment(seg.dataset.segIdx, false);
+				});
+
+				// Click event
+				seg.addEventListener('click', (e) => {
+					e.stopPropagation();
+					const idx = parseInt(seg.dataset.segIdx);
+
+					if (groupingEnabled) {
+						// Grouping mode: select/deselect entire group
+						const group = getGroupForSegment(idx);
+						const allSelected = group.every(i => selectedSegments.has(i));
+
+						if (allSelected) {
+							// Deselect entire group
+							group.forEach(i => selectedSegments.delete(i));
+						} else {
+							// Select entire group (clear others first)
+							selectedSegments.clear();
+							group.forEach(i => selectedSegments.add(i));
+						}
+					} else {
+						// Original behavior
+						if (e.shiftKey && selectedSegments.size > 0) {
+							// Shift-click: select range
+							const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+							const minIdx = Math.min(sortedIndices[0], idx);
+							const maxIdx = Math.max(sortedIndices[sortedIndices.length - 1], idx);
+							for (let i = minIdx; i <= maxIdx; i++) {
+								selectedSegments.add(i);
+							}
+						} else if (selectedSegments.has(idx)) {
+							selectedSegments.delete(idx);
+						} else {
+							// Ensure contiguous selection
+							if (selectedSegments.size > 0) {
+								const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+								const minIdx = sortedIndices[0];
+								const maxIdx = sortedIndices[sortedIndices.length - 1];
+								if (idx < minIdx - 1 || idx > maxIdx + 1) {
+									// Not adjacent, clear and select new
+									selectedSegments.clear();
+								} else {
+									// Fill the gap
+									for (let i = Math.min(minIdx, idx); i <= Math.max(maxIdx, idx); i++) {
+										selectedSegments.add(i);
+									}
+								}
+							}
+							selectedSegments.add(idx);
+						}
+					}
+
+					updateSelectionUI();
+				});
+			});
+
+			// Clear selection
+			clearSelectionBtn.addEventListener('click', () => {
+				selectedSegments.clear();
+				updateSelectionUI();
+			});
+
+			// === Re-transcribe Modal ===
+			const retranscribeModal = document.getElementById('retranscribe-modal');
+			const modalCloseBtn = document.getElementById('retranscribe-modal-close');
+			const modalSelectionInfo = document.getElementById('modal-selection-info');
+			const modalModel = document.getElementById('modal-model');
+			const modalTempo = document.getElementById('modal-tempo');
+			const modalExecuteBtn = document.getElementById('modal-execute-btn');
+			const modalLoading = document.getElementById('modal-loading');
+			const modalOriginalContent = document.getElementById('modal-original-content');
+			const modalResultContent = document.getElementById('modal-result-content');
+			const modalCancelBtn = document.getElementById('modal-cancel-btn');
+			const modalApplyBtn = document.getElementById('modal-apply-btn');
+			const modalCopyDebugBtn = document.getElementById('modal-copy-debug-btn');
+			// Whisper Align specific elements
+			const modalAlignInfo = document.getElementById('modal-align-info');
+			const modalWhisperRaw = document.getElementById('modal-whisper-raw');
+			const modalAlignmentDiff = document.getElementById('modal-alignment-diff');
+			// Boundary adjustment elements
+			const modalAutoAdjust = document.getElementById('modal-auto-adjust');
+			const boundaryParams = document.getElementById('boundary-params');
+			const boundaryThreshold = document.getElementById('modal-boundary-threshold');
+			const boundaryMerge = document.getElementById('modal-boundary-merge');
+			const boundarySearch = document.getElementById('modal-boundary-search');
+			const boundaryPadding = document.getElementById('modal-boundary-padding');
+			const boundaryPreview = document.getElementById('boundary-preview');
+			const boundaryWaveformCanvas = document.getElementById('boundary-waveform-canvas');
+			const boundaryMarkerStartOrig = document.getElementById('boundary-marker-start-orig');
+			const boundaryMarkerEndOrig = document.getElementById('boundary-marker-end-orig');
+			const boundaryMarkerStartAdj = document.getElementById('boundary-marker-start-adj');
+			const boundaryMarkerEndAdj = document.getElementById('boundary-marker-end-adj');
+			const boundarySegmentRegion = document.getElementById('boundary-segment-region');
+			const boundaryAdjustedRegion = document.getElementById('boundary-adjusted-region');
+			const boundaryTimeStart = document.getElementById('boundary-time-start');
+			const boundaryTimeEnd = document.getElementById('boundary-time-end');
+			const boundaryResult = document.getElementById('boundary-result');
+			const boundaryOriginalRange = document.getElementById('boundary-original-range');
+			const boundaryAdjustedRange = document.getElementById('boundary-adjusted-range');
+			const boundaryDiff = document.getElementById('boundary-diff');
+			const boundaryClusters = document.getElementById('boundary-clusters');
+
+			// Boundary preview state
+			let boundaryPreviewData = null; // { peaks, duration, segmentStart, segmentEnd }
+			let modalSegmentRange = null; // { minIdx, maxIdx } - segment range for current modal session
+
+			let currentPreviewResult = null; // Store preview result for apply
+			let currentDebugInfo = null; // Store full debug info for copy
+
+			// === Boundary Preview Functions ===
+
+			// Find audio clusters in peaks data (client-side implementation)
+			function findAudioClusters(peaks, samplesPerSec, startTime, endTime, threshold) {
+				const clusters = [];
+				const startIdx = Math.floor(startTime * samplesPerSec);
+				const endIdx = Math.ceil(endTime * samplesPerSec);
+
+				let currentCluster = null;
+				for (let i = Math.max(0, startIdx); i < Math.min(peaks.length, endIdx); i++) {
+					const peak = peaks[i];
+					const time = i / samplesPerSec;
+
+					if (peak >= threshold) {
+						if (!currentCluster) {
+							currentCluster = { startTime: time, endTime: time, maxPeak: peak };
+						} else {
+							currentCluster.endTime = time;
+							if (peak > currentCluster.maxPeak) currentCluster.maxPeak = peak;
+						}
+					} else {
+						if (currentCluster) {
+							clusters.push(currentCluster);
+							currentCluster = null;
+						}
+					}
+				}
+				if (currentCluster) clusters.push(currentCluster);
+				return clusters;
+			}
+
+			// Merge clusters within gap
+			function mergeClusters(clusters, mergeGapMs) {
+				if (clusters.length === 0) return [];
+				const mergeGapSec = mergeGapMs / 1000;
+				const merged = [];
+				let current = { ...clusters[0] };
+
+				for (let i = 1; i < clusters.length; i++) {
+					const next = clusters[i];
+					const gap = next.startTime - current.endTime;
+					if (gap <= mergeGapSec) {
+						current.endTime = next.endTime;
+						if (next.maxPeak > current.maxPeak) current.maxPeak = next.maxPeak;
+					} else {
+						merged.push(current);
+						current = { ...next };
+					}
+				}
+				merged.push(current);
+				return merged;
+			}
+
+			// Calculate boundary adjustment (client-side)
+			function calculateBoundaryAdjustment(peaks, samplesPerSec, segmentStart, segmentEnd, params) {
+				const searchWindowSec = params.searchMs / 1000;
+				const mergeGapSec = params.mergeGapMs / 1000;
+				const totalDuration = peaks.length / samplesPerSec;
+
+				// Search before segment
+				const searchStartBefore = Math.max(0, segmentStart - searchWindowSec);
+				let clustersBefore = findAudioClusters(peaks, samplesPerSec, searchStartBefore, segmentStart, params.threshold);
+				clustersBefore = mergeClusters(clustersBefore, params.mergeGapMs);
+
+				// Search after segment
+				const searchEndAfter = Math.min(totalDuration, segmentEnd + searchWindowSec);
+				let clustersAfter = findAudioClusters(peaks, samplesPerSec, segmentEnd, searchEndAfter, params.threshold);
+				clustersAfter = mergeClusters(clustersAfter, params.mergeGapMs);
+
+				// Adjust start
+				let newStart = segmentStart;
+				const mergedBefore = [];
+				for (let i = clustersBefore.length - 1; i >= 0; i--) {
+					const cluster = clustersBefore[i];
+					const gap = newStart - cluster.endTime;
+					if (gap <= mergeGapSec) {
+						newStart = cluster.startTime;
+						mergedBefore.unshift(cluster);
+					} else {
+						break;
+					}
+				}
+
+				// Adjust end
+				let newEnd = segmentEnd;
+				const mergedAfter = [];
+				for (const cluster of clustersAfter) {
+					const gap = cluster.startTime - newEnd;
+					if (gap <= mergeGapSec) {
+						newEnd = cluster.endTime;
+						mergedAfter.push(cluster);
+					} else {
+						break;
+					}
+				}
+
+				return {
+					originalStart: segmentStart,
+					originalEnd: segmentEnd,
+					adjustedStart: newStart,
+					adjustedEnd: newEnd,
+					startExtendedMs: Math.round((segmentStart - newStart) * 1000),
+					endExtendedMs: Math.round((newEnd - segmentEnd) * 1000),
+					mergedClusters: [...mergedBefore, ...mergedAfter]
+				};
+			}
+
+			// Draw boundary waveform preview
+			function drawBoundaryWaveform() {
+				if (!boundaryPreviewData) return;
+
+				const { peaks, duration, segmentStart, segmentEnd } = boundaryPreviewData;
+				const canvas = boundaryWaveformCanvas;
+				const ctx = canvas.getContext('2d');
+
+				// Calculate view range (segment ± search window + margin)
+				const searchMs = parseInt(boundarySearch.value);
+				const margin = 0.5; // Extra margin in seconds
+				const viewStart = Math.max(0, segmentStart - searchMs / 1000 - margin);
+				const viewEnd = Math.min(duration, segmentEnd + searchMs / 1000 + margin);
+				const viewDuration = viewEnd - viewStart;
+
+				// Set canvas resolution
+				const width = canvas.offsetWidth;
+				const height = canvas.offsetHeight;
+				canvas.width = width * 2;
+				canvas.height = height * 2;
+				ctx.scale(2, 2);
+
+				// Clear
+				ctx.clearRect(0, 0, width, height);
+
+				// Calculate peaks to show
+				const samplesPerSec = peaks.length / duration;
+				const startIdx = Math.floor(viewStart * samplesPerSec);
+				const endIdx = Math.ceil(viewEnd * samplesPerSec);
+				const peaksToShow = peaks.slice(startIdx, endIdx);
+
+				if (peaksToShow.length === 0) return;
+
+				// Draw waveform
+				const barWidth = width / peaksToShow.length;
+				const centerY = height / 2;
+				const threshold = parseFloat(boundaryThreshold.value);
+
+				for (let i = 0; i < peaksToShow.length; i++) {
+					const peak = peaksToShow[i];
+					const barHeight = peak * height * 0.9;
+					const x = i * barWidth;
+
+					// Color based on threshold
+					ctx.fillStyle = peak >= threshold ? '#6B7280' : '#D1D5DB';
+					ctx.fillRect(x, centerY - barHeight / 2, Math.max(1, barWidth - 0.5), barHeight);
+				}
+
+				// Update time axis
+				boundaryTimeStart.textContent = formatTimeMs(viewStart);
+				boundaryTimeEnd.textContent = formatTimeMs(viewEnd);
+
+				// Update segment region highlight
+				const segStartPct = ((segmentStart - viewStart) / viewDuration) * 100;
+				const segEndPct = ((segmentEnd - viewStart) / viewDuration) * 100;
+				boundarySegmentRegion.style.left = `${segStartPct}%`;
+				boundarySegmentRegion.style.width = `${segEndPct - segStartPct}%`;
+
+				// Update original boundary markers
+				boundaryMarkerStartOrig.style.left = `${segStartPct}%`;
+				boundaryMarkerEndOrig.style.left = `${segEndPct}%`;
+
+				// Calculate and show adjusted boundaries if enabled
+				if (modalAutoAdjust.checked) {
+					const params = {
+						threshold: parseFloat(boundaryThreshold.value),
+						mergeGapMs: parseInt(boundaryMerge.value),
+						searchMs: parseInt(boundarySearch.value)
+					};
+
+					const adjustment = calculateBoundaryAdjustment(peaks, samplesPerSec, segmentStart, segmentEnd, params);
+
+					// Apply padding to adjusted boundaries
+					const paddingMs = parseInt(boundaryPadding.value);
+					const paddingSec = paddingMs / 1000;
+					let paddedStart = adjustment.adjustedStart - paddingSec;
+					let paddedEnd = adjustment.adjustedEnd + paddingSec;
+					if (paddedStart < 0) paddedStart = 0;
+					if (paddedEnd > duration) paddedEnd = duration;
+
+					// Update adjusted boundary markers (with padding)
+					const adjStartPct = ((paddedStart - viewStart) / viewDuration) * 100;
+					const adjEndPct = ((paddedEnd - viewStart) / viewDuration) * 100;
+
+					boundaryMarkerStartAdj.style.left = `${adjStartPct}%`;
+					boundaryMarkerEndAdj.style.left = `${adjEndPct}%`;
+					boundaryMarkerStartAdj.classList.remove('hidden');
+					boundaryMarkerEndAdj.classList.remove('hidden');
+
+					// Update adjusted region
+					boundaryAdjustedRegion.style.left = `${adjStartPct}%`;
+					boundaryAdjustedRegion.style.width = `${adjEndPct - adjStartPct}%`;
+					boundaryAdjustedRegion.classList.remove('hidden');
+
+					// Update result text (show padded values)
+					boundaryOriginalRange.textContent = `${formatTimeMs(adjustment.originalStart)} - ${formatTimeMs(adjustment.originalEnd)}`;
+					boundaryAdjustedRange.textContent = `${formatTimeMs(paddedStart)} - ${formatTimeMs(paddedEnd)}`;
+
+					const startExtMs = Math.round((segmentStart - paddedStart) * 1000);
+					const endExtMs = Math.round((paddedEnd - segmentEnd) * 1000);
+					const diffParts = [];
+					if (startExtMs !== 0) {
+						diffParts.push(`開始: ${startExtMs > 0 ? '-' : '+'}${Math.abs(startExtMs)}ms`);
+					}
+					if (endExtMs !== 0) {
+						diffParts.push(`終了: ${endExtMs > 0 ? '+' : '-'}${Math.abs(endExtMs)}ms`);
+					}
+					boundaryDiff.textContent = diffParts.length > 0 ? `(${diffParts.join(', ')})` : '(変更なし)';
+
+					if (adjustment.mergedClusters.length > 0) {
+						const clusterInfo = adjustment.mergedClusters.map(c => {
+							const duration = ((c.endTime - c.startTime) * 1000).toFixed(0);
+							return `${formatTimeMs(c.startTime)}-${formatTimeMs(c.endTime)} (${duration}ms)`;
+						}).join(' | ');
+						boundaryClusters.textContent = `検出クラスタ: ${clusterInfo}`;
+					} else {
+						boundaryClusters.textContent = '追加クラスタなし';
+					}
+
+					boundaryResult.classList.remove('hidden');
+				} else {
+					// Hide adjusted markers
+					boundaryMarkerStartAdj.classList.add('hidden');
+					boundaryMarkerEndAdj.classList.add('hidden');
+					boundaryAdjustedRegion.classList.add('hidden');
+					boundaryResult.classList.add('hidden');
+				}
+			}
+
+			// Toggle boundary params visibility and update preview
+			modalAutoAdjust.addEventListener('change', () => {
+				if (modalAutoAdjust.checked) {
+					boundaryParams.classList.remove('hidden');
+				} else {
+					boundaryParams.classList.add('hidden');
+				}
+				drawBoundaryWaveform();
+			});
+
+			// Redraw on parameter change
+			boundaryThreshold.addEventListener('change', drawBoundaryWaveform);
+			boundaryMerge.addEventListener('change', drawBoundaryWaveform);
+			boundarySearch.addEventListener('change', drawBoundaryWaveform);
+			boundaryPadding.addEventListener('change', drawBoundaryWaveform);
+
+			// Format time as MM:SS.mm
+			function formatTimeMs(seconds) {
+				const mins = Math.floor(seconds / 60);
+				const secs = seconds % 60;
+				return `${mins}:${secs.toFixed(2).padStart(5, '0')}`;
+			}
+
+			// Render segments to HTML
+			function renderSegments(segments, isResult = false) {
+				if (!segments || segments.length === 0) {
+					return '<div class="text-gray-400 text-center py-4">セグメントがありません</div>';
+				}
+
+				return segments.map(seg => {
+					const bgClass = isResult ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200';
+					const timeClass = isResult ? 'text-green-600' : 'text-gray-500';
+					return `
+						<div class="mb-3 p-2 rounded border ${bgClass}">
+							<div class="flex justify-between items-start mb-1">
+								<span class="text-xs ${timeClass}">${formatTimeMs(seg.start_time)} - ${formatTimeMs(seg.end_time)}</span>
+								<span class="text-xs text-gray-400">seg${seg.index}</span>
+							</div>
+							<div class="text-sm">${seg.text || '<span class="text-gray-400">(空)</span>'}</div>
+						</div>
+					`;
+				}).join('');
+			}
+
+			// Render alignment diff to HTML
+			function renderAlignmentDiff(diff) {
+				if (!diff || diff.length === 0) return '';
+
+				return diff.map(item => {
+					let className = '';
+					let text = item.char;
+
+					switch (item.op) {
+						case 'match':
+							className = 'bg-gray-200 text-gray-800';
+							break;
+						case 'insert':
+							className = 'bg-green-200 text-green-800';
+							break;
+						case 'delete':
+							className = 'bg-red-200 text-red-800 line-through';
+							break;
+					}
+
+					// Handle special characters for display
+					if (text === ' ') text = '\u00A0'; // Non-breaking space
+					if (text === '\n') text = '↵';
+
+					return `<span class="${className} px-0.5">${text}</span>`;
+				}).join('');
+			}
+
+			// Show/hide Whisper Align info section
+			function updateAlignInfoVisibility(show, result = null) {
+				if (show && result) {
+					modalAlignInfo.classList.remove('hidden');
+					modalWhisperRaw.textContent = result.whisper_raw_text || '';
+					modalAlignmentDiff.innerHTML = renderAlignmentDiff(result.alignment_diff);
+				} else {
+					modalAlignInfo.classList.add('hidden');
+					modalWhisperRaw.textContent = '';
+					modalAlignmentDiff.innerHTML = '';
+				}
+			}
+
+			// Open modal and show original segments
+			async function openRetranscribeModal() {
+				if (selectedSegments.size === 0) return;
+
+				// Determine segment range from selection
+				const sortedIndices = Array.from(selectedSegments).sort((a, b) => a - b);
+				const minIdx = sortedIndices[0];
+				const maxIdx = sortedIndices[sortedIndices.length - 1];
+
+				// Find time range
+				let startTime = Infinity, endTime = 0;
+				asrSegments.forEach(seg => {
+					const idx = parseInt(seg.dataset.segIdx);
+					if (idx >= minIdx && idx <= maxIdx) {
+						const start = parseFloat(seg.dataset.start);
+						const end = parseFloat(seg.dataset.end);
+						if (start < startTime) startTime = start;
+						if (end > endTime) endTime = end;
+					}
+				});
+
+				const duration = endTime - startTime;
+				modalSelectionInfo.textContent = `seg${minIdx + 1}${minIdx !== maxIdx ? '-seg' + (maxIdx + 1) : ''} (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s, ${duration.toFixed(1)}秒)`;
+
+				// Store segment range for use in executePreview
+				modalSegmentRange = { minIdx, maxIdx };
+
+				// Fetch original segments
+				const data = await fetchTranscriptData();
+				if (data && data.segments) {
+					const originalSegments = [];
+					for (let i = minIdx; i <= maxIdx && i < data.segments.length; i++) {
+						originalSegments.push({
+							index: i + 1, // 1-based for display (consistent with API)
+							start_time: data.segments[i].start_time,
+							end_time: data.segments[i].end_time,
+							text: data.segments[i].text
+						});
+					}
+					modalOriginalContent.innerHTML = renderSegments(originalSegments, false);
+				}
+
+				// Reset result pane and align info
+				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">「実行」ボタンを押して再文字起こしを実行してください</div>';
+				modalApplyBtn.disabled = true;
+				modalCopyDebugBtn.classList.add('hidden');
+				currentPreviewResult = null;
+				currentDebugInfo = null;
+				updateAlignInfoVisibility(false);
+
+				// Reset and initialize boundary adjustment preview
+				boundaryResult.classList.add('hidden');
+				boundaryPreviewData = null;
+
+				// Show modal first (so canvas has dimensions)
+				retranscribeModal.classList.remove('hidden');
+
+				// Fetch waveform data and show preview
+				const waveformResponse = await fetch(`/api/audio/${sourceID}/waveform?samples_per_sec=50`);
+				if (waveformResponse.ok) {
+					const waveData = await waveformResponse.json();
+					boundaryPreviewData = {
+						peaks: waveData.peaks,
+						duration: waveData.duration,
+						segmentStart: startTime,
+						segmentEnd: endTime
+					};
+					boundaryPreview.classList.remove('hidden');
+					drawBoundaryWaveform();
+				}
+			}
+
+			// Close modal
+			function closeRetranscribeModal() {
+				retranscribeModal.classList.add('hidden');
+				currentPreviewResult = null;
+				currentDebugInfo = null;
+				modalSegmentRange = null;
+				updateAlignInfoVisibility(false);
+				// Reset boundary preview
+				boundaryPreviewData = null;
+				boundaryPreview.classList.add('hidden');
+			}
+
+			// Copy debug info to clipboard
+			async function copyDebugInfo() {
+				if (!currentDebugInfo) return;
+
+				const debugJson = JSON.stringify(currentDebugInfo, null, 2);
+
+				try {
+					await navigator.clipboard.writeText(debugJson);
+					// Visual feedback
+					const originalText = modalCopyDebugBtn.querySelector('span > span').textContent;
+					modalCopyDebugBtn.querySelector('span > span').textContent = 'Copied!';
+					modalCopyDebugBtn.classList.add('text-green-600');
+					setTimeout(() => {
+						modalCopyDebugBtn.querySelector('span > span').textContent = originalText;
+						modalCopyDebugBtn.classList.remove('text-green-600');
+					}, 1500);
+				} catch (err) {
+					alert('クリップボードへのコピーに失敗しました: ' + err.message);
+				}
+			}
+
+			// Execute preview (without saving)
+			async function executePreview() {
+				if (!modalSegmentRange) return;
+
+				const segmentStart = modalSegmentRange.minIdx;
+				const segmentEnd = modalSegmentRange.maxIdx;
+				const tempo = parseFloat(modalTempo.value);
+				const model = modalModel.value;
+
+				// Show loading
+				modalExecuteBtn.classList.add('hidden');
+				modalLoading.classList.remove('hidden');
+				modalResultContent.innerHTML = '<div class="text-gray-400 text-center py-8">処理中...</div>';
+
+				try {
+					const requestBody = {
+						segment_start: segmentStart,
+						segment_end: segmentEnd,
+						tempo: tempo,
+						model: model,
+						preview: true
+					};
+
+					// Add boundary adjustment params if enabled
+					if (modalAutoAdjust.checked) {
+						requestBody.auto_adjust_boundary = true;
+						requestBody.boundary_threshold = parseFloat(boundaryThreshold.value);
+						requestBody.boundary_merge_gap_ms = parseInt(boundaryMerge.value);
+						requestBody.boundary_search_ms = parseInt(boundarySearch.value);
+						requestBody.boundary_padding_ms = parseInt(boundaryPadding.value);
+					}
+
+					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(requestBody)
+					});
+
+					const result = await response.json();
+
+					if (response.ok && result.success) {
+						currentPreviewResult = {
+							segment_start: segmentStart,
+							segment_end: segmentEnd,
+							tempo: tempo,
+							model: model,
+							auto_adjust_boundary: modalAutoAdjust.checked,
+							boundary_threshold: parseFloat(boundaryThreshold.value),
+							boundary_merge_gap_ms: parseInt(boundaryMerge.value),
+							boundary_search_ms: parseInt(boundarySearch.value),
+							boundary_padding_ms: parseInt(boundaryPadding.value)
+						};
+
+						// Store full debug info
+						currentDebugInfo = {
+							request: {
+								source_id: sourceID,
+								segment_start: segmentStart,
+								segment_end: segmentEnd,
+								tempo: tempo,
+								model: model
+							},
+							response: result
+						};
+
+						modalResultContent.innerHTML = renderSegments(result.new_segments, true);
+						modalApplyBtn.disabled = false;
+						modalCopyDebugBtn.classList.remove('hidden');
+
+						// Show Whisper Align info if available
+						if (model === 'whisper:align' && result.whisper_raw_text) {
+							updateAlignInfoVisibility(true, result);
+						} else {
+							updateAlignInfoVisibility(false);
+						}
+
+						// Show boundary adjustment info if available
+						if (result.boundary_adjustment) {
+							const ba = result.boundary_adjustment;
+							boundaryOriginalRange.textContent = `${formatTimeMs(ba.original_start)} - ${formatTimeMs(ba.original_end)}`;
+							boundaryAdjustedRange.textContent = `${formatTimeMs(ba.adjusted_start)} - ${formatTimeMs(ba.adjusted_end)}`;
+
+							const diffParts = [];
+							if (ba.start_extended_ms !== 0) {
+								diffParts.push(`開始: ${ba.start_extended_ms > 0 ? '-' : '+'}${Math.abs(ba.start_extended_ms)}ms`);
+							}
+							if (ba.end_extended_ms !== 0) {
+								diffParts.push(`終了: ${ba.end_extended_ms > 0 ? '+' : '-'}${Math.abs(ba.end_extended_ms)}ms`);
+							}
+							boundaryDiff.textContent = diffParts.length > 0 ? `(${diffParts.join(', ')})` : '';
+
+							// Display merged clusters
+							if (ba.merged_clusters && ba.merged_clusters.length > 0) {
+								const clusterInfo = ba.merged_clusters.map((c, i) => {
+									const duration = ((c.end_time - c.start_time) * 1000).toFixed(0);
+									return `${formatTimeMs(c.start_time)}-${formatTimeMs(c.end_time)} (${duration}ms)`;
+								}).join(' | ');
+								boundaryClusters.textContent = `検出クラスタ: ${clusterInfo}`;
+							} else {
+								boundaryClusters.textContent = '';
+							}
+
+							boundaryResult.classList.remove('hidden');
+						} else {
+							boundaryResult.classList.add('hidden');
+						}
+					} else {
+						modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${result.error || '再文字起こしに失敗しました'}</div>`;
+						modalApplyBtn.disabled = true;
+						modalCopyDebugBtn.classList.add('hidden');
+						currentDebugInfo = null;
+						updateAlignInfoVisibility(false);
+						boundaryResult.classList.add('hidden');
+					}
+				} catch (err) {
+					modalResultContent.innerHTML = `<div class="text-red-500 text-center py-8">エラー: ${err.message}</div>`;
+					modalApplyBtn.disabled = true;
+					modalCopyDebugBtn.classList.add('hidden');
+					currentDebugInfo = null;
+					updateAlignInfoVisibility(false);
+				} finally {
+					modalExecuteBtn.classList.remove('hidden');
+					modalLoading.classList.add('hidden');
+				}
+			}
+
+			// Apply changes (save)
+			async function applyChanges() {
+				if (!currentPreviewResult) return;
+
+				modalApplyBtn.disabled = true;
+				modalApplyBtn.textContent = '適用中...';
+
+				try {
+					const requestBody = {
+						segment_start: currentPreviewResult.segment_start,
+						segment_end: currentPreviewResult.segment_end,
+						tempo: currentPreviewResult.tempo,
+						model: currentPreviewResult.model,
+						preview: false
+					};
+
+					// Include boundary adjustment params if they were used
+					if (currentPreviewResult.auto_adjust_boundary) {
+						requestBody.auto_adjust_boundary = true;
+						requestBody.boundary_threshold = currentPreviewResult.boundary_threshold;
+						requestBody.boundary_merge_gap_ms = currentPreviewResult.boundary_merge_gap_ms;
+						requestBody.boundary_search_ms = currentPreviewResult.boundary_search_ms;
+						requestBody.boundary_padding_ms = currentPreviewResult.boundary_padding_ms;
+					}
+
+					const response = await fetch(`/api/audio/${sourceID}/retranscribe`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(requestBody)
+					});
+
+					const result = await response.json();
+
+					if (response.ok && result.success) {
+						// Reload page to show updated transcript
+						window.location.reload();
+					} else {
+						alert('エラー: ' + (result.error || '保存に失敗しました'));
+						modalApplyBtn.disabled = false;
+						modalApplyBtn.textContent = '適用';
+					}
+				} catch (err) {
+					alert('エラー: ' + err.message);
+					modalApplyBtn.disabled = false;
+					modalApplyBtn.textContent = '適用';
+				}
+			}
+
+			// Event listeners for modal
+			retranscribeBtn.addEventListener('click', openRetranscribeModal);
+			modalCloseBtn.addEventListener('click', closeRetranscribeModal);
+			modalCancelBtn.addEventListener('click', closeRetranscribeModal);
+			modalExecuteBtn.addEventListener('click', executePreview);
+			modalApplyBtn.addEventListener('click', applyChanges);
+			modalCopyDebugBtn.addEventListener('click', copyDebugInfo);
+
+			// Close modal on backdrop click
+			retranscribeModal.addEventListener('click', (e) => {
+				if (e.target === retranscribeModal) {
+					closeRetranscribeModal();
+				}
+			});
+
+			// Close modal on Escape key
+			document.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape' && !retranscribeModal.classList.contains('hidden')) {
+					closeRetranscribeModal();
+				}
+			});
+		</script>
+	}
+}

@@ -1,0 +1,165 @@
+package components
+
+import (
+	"zbor/internal/storage/sqlc"
+	"zbor/web/layouts"
+)
+
+templ ArticleList(articles []sqlc.Article) {
+	@layouts.Base("記事一覧") {
+		<div class="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+			<div class="flex justify-between items-center mb-6">
+				<h1 class="text-2xl font-bold text-gray-900">記事一覧</h1>
+				<div class="flex space-x-4">
+					<input
+						type="text"
+						placeholder="検索..."
+						class="px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+						id="search-input"
+					/>
+				</div>
+			</div>
+
+			if len(articles) == 0 {
+				<div class="text-center py-12">
+					<svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+					</svg>
+					<h3 class="mt-2 text-sm font-medium text-gray-900">記事がありません</h3>
+					<p class="mt-1 text-sm text-gray-500">まだ記事が作成されていません。</p>
+				</div>
+			} else {
+				<div class="bg-white shadow overflow-hidden sm:rounded-md">
+					<ul class="divide-y divide-gray-200">
+						for _, article := range articles {
+							<li>
+								<a href={ templ.SafeURL("/articles/" + article.ID) } class="block hover:bg-gray-50">
+									<div class="px-4 py-4 sm:px-6">
+										<div class="flex items-center justify-between">
+											<p class="text-lg font-medium text-blue-600 truncate">
+												{ article.Title }
+											</p>
+											<div class="ml-2 flex-shrink-0 flex">
+												if article.Status != nil {
+													<span class={ "px-2 inline-flex text-xs leading-5 font-semibold rounded-full", statusBadgeClass(*article.Status) }>
+														{ *article.Status }
+													</span>
+												}
+											</div>
+										</div>
+										<div class="mt-2 sm:flex sm:justify-between">
+											<div class="sm:flex">
+												if article.SourceType != nil {
+													<p class="flex items-center text-sm text-gray-500">
+														<svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+															<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
+														</svg>
+														{ *article.SourceType }
+													</p>
+												}
+											</div>
+											<div class="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
+												<svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+												</svg>
+												<time>{ article.CreatedAt.Format("2006-01-02 15:04") }</time>
+											</div>
+										</div>
+									</div>
+								</a>
+							</li>
+						}
+					</ul>
+				</div>
+			}
+		</div>
+	}
+}
+
+templ ArticleDetail(article *sqlc.Article, tags []sqlc.Tag) {
+	@layouts.Base(article.Title) {
+		<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+			<div class="mb-6">
+				<a href="/articles" class="text-blue-600 hover:text-blue-800 flex items-center">
+					<svg class="w-5 h-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+					</svg>
+					記事一覧に戻る
+				</a>
+			</div>
+
+			<article class="bg-white shadow rounded-lg overflow-hidden">
+				<div class="px-6 py-8">
+					<h1 class="text-3xl font-bold text-gray-900 mb-4">{ article.Title }</h1>
+
+					<div class="flex flex-wrap gap-2 mb-6">
+						for _, tag := range tags {
+							<span class="px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-full">
+								{ tag.Name }
+							</span>
+						}
+					</div>
+
+					<div class="flex items-center text-sm text-gray-500 mb-6 space-x-4">
+						if article.SourceType != nil {
+							<span class="flex items-center">
+								<svg class="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path>
+								</svg>
+								{ *article.SourceType }
+							</span>
+						}
+						<span class="flex items-center">
+							<svg class="w-4 h-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+							</svg>
+							{ article.CreatedAt.Format("2006-01-02 15:04") }
+						</span>
+						if article.Status != nil {
+							<span class={ "px-2 py-1 text-xs font-semibold rounded-full", statusBadgeClass(*article.Status) }>
+								{ *article.Status }
+							</span>
+						}
+					</div>
+
+					if article.SourceUrl != nil && *article.SourceUrl != "" {
+						<div class="mb-6 p-4 bg-gray-50 rounded-lg">
+							<a href={ templ.SafeURL(*article.SourceUrl) } target="_blank" class="text-blue-600 hover:underline flex items-center">
+								<svg class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+								</svg>
+								{ *article.SourceUrl }
+							</a>
+						</div>
+					}
+
+					if article.SourceID != nil && article.SourceType != nil && *article.SourceType == "audio" {
+						<div class="mb-6 p-4 bg-blue-50 rounded-lg">
+							<a href={ templ.SafeURL("/audio/" + *article.SourceID + "/sync") } class="text-blue-600 hover:underline flex items-center">
+								<svg class="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15.536a5 5 0 001.414 1.414m2.828-9.9a9 9 0 0112.728 0"></path>
+								</svg>
+								Transcript Sync (audio playback)
+							</a>
+						</div>
+					}
+
+					<div class="prose max-w-none">
+						<pre class="whitespace-pre-wrap text-gray-800 font-sans">{ article.Content }</pre>
+					</div>
+				</div>
+			</article>
+		</div>
+	}
+}
+
+func statusBadgeClass(status string) string {
+	switch status {
+	case "published":
+		return "bg-green-100 text-green-800"
+	case "draft":
+		return "bg-yellow-100 text-yellow-800"
+	default:
+		return "bg-gray-100 text-gray-800"
+	}
+}

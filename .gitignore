@@ -1,5 +1,10 @@
 # Binaries
 zbor
+zbor-transcribe
+zbor-youtube
+zbor-webfetch
+transcribe-stream
+transcribe-vad
 *.exe
 *.exe~
 *.dll
@@ -38,3 +43,12 @@ build-errors.log
 # OS
 .DS_Store
 Thumbs.db
+
+#
+output/
+/models/
+
+# Test audio files (not public)
+**/testdata/*.wav
+**/testdata/*.mp3
+**/testdata/*.m4a

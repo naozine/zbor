@@ -8,6 +8,10 @@ templ Base(title string) {
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+			<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+			<meta http-equiv="Pragma" content="no-cache"/>
+			<meta http-equiv="Expires" content="0"/>
+			<meta name="version" content={ version.Version }/>
 			<title>{ title } - Zbor</title>
 			<script src="https://cdn.tailwindcss.com"></script>
 		</head>
@@ -22,6 +26,12 @@ templ Base(title string) {
 							<div class="hidden sm:ml-6 sm:flex sm:space-x-8">
 								<a href="/" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
 									ホーム
+								</a>
+								<a href="/articles" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+									記事
+								</a>
+								<a href="/audio/upload" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+									音声
 								</a>
 								<a href="/about" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
 									About
